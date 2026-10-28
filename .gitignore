@@ -3,3 +3,27 @@ node_modules
 .env
 
 /src/generated/prisma
+
+dist/
+.dev-mail/
+prisma/*.db
+prisma/*.db-*
+
+prisma/*.db.backup-*
+
+uploads/
+
+.env.production
+prisma/backups/
+
+prisma/worker-heartbeat
+
+credentials/
+*.p12
+*.p8
+*.pem
+
+*.db
+*.db-*
+*.db.backup-*
+*.log

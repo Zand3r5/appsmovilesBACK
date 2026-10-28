@@ -1,116 +1,61 @@
-import { prisma } from "../prisma";
-import { fail } from "../utils/http";
-
-const BASE = "https://api.themoviedb.org/3";
-const MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;      // una película se refresca si tiene más de 7 días
-const CREW_JOBS = ["Screenplay", "Director of Photography", "Original Music Composer", "Editor", "Producer"];
-
-async function tmdb(path: string) {
-  const sep = path.includes("?") ? "&" : "?";
-  const res = await fetch(`${BASE}${path}${sep}api_key=${process.env.TMDB_KEY}&language=es-AR&region=AR`);
-  if (res.status === 404) fail(404, "La película no existe en TMDB");
-  if (!res.ok) fail(502, "TMDB no respondió");
-  return res.json();
+import { prisma } from '../prisma';
+const BASE = 'https://api.themoviedb.org/3';
+const CREW_JOBS = ['Screenplay', 'Director of Photography', 'Original Music Composer', 'Editor', 'Producer'];
+async function tmdb(path: string): Promise<any> {
+  if (!process.env.TMDB_KEY) throw new Error('Falta TMDB_KEY en .env');
+  const url = new URL((process.env.TMDB_BASE_URL ?? BASE) + path);
+  url.searchParams.set('api_key', process.env.TMDB_KEY);
+  url.searchParams.set('language', 'es-AR'); url.searchParams.set('region', 'AR');
+  const response = await fetch(url, { signal: AbortSignal.timeout(15000) });
+  if (!response.ok) throw new Error('TMDB respondió ' + response.status);
+  return response.json();
 }
-
-const names = (list: any[] = []) => list.map((p) => p.provider_name);
-
-// Trae una película COMPLETA de TMDB y la guarda (la crea o la actualiza)
+const names = (list: any[] = []) => list.map(p => p.provider_name);
 export async function importMovieFromTmdb(tmdbId: number) {
-  const m = await tmdb(`/movie/${tmdbId}?append_to_response=credits,videos,watch/providers`);
-  const ar = m["watch/providers"]?.results?.AR ?? {};
-
+  const m = await tmdb(`/movie/${tmdbId}?append_to_response=credits,videos,watch/providers,release_dates`);
+  const ar = m['watch/providers']?.results?.AR ?? {};
+  const localRelease = m.release_dates?.results?.find((r: any) => r.iso_3166_1 === 'AR')?.release_dates
+    ?.filter((r: any) => [2, 3].includes(r.type)).sort((a: any, b: any) => a.release_date.localeCompare(b.release_date))[0]?.release_date?.slice(0, 10);
   const metadata = JSON.stringify({
-    actors: m.credits.cast.slice(0, 8).map((c: any) => ({ name: c.name, character: c.character })),
-    directors: m.credits.crew.filter((c: any) => c.job === "Director").map((c: any) => c.name),
-    crew: m.credits.crew
-      .filter((c: any) => CREW_JOBS.includes(c.job))
-      .slice(0, 6)
-      .map((c: any) => ({ name: c.name, job: c.job })),
-    trailers: m.videos.results
-      .filter((v: any) => v.site === "YouTube" && v.type === "Trailer")
-      .slice(0, 3)
-      .map((v: any) => ({ name: v.name, site: "YouTube", key: v.key })),
+    actors: (m.credits?.cast ?? []).slice(0, 8).map((c: any) => ({ name: c.name, character: c.character })),
+    directors: (m.credits?.crew ?? []).filter((c: any) => c.job === 'Director').map((c: any) => c.name),
+    crew: (m.credits?.crew ?? []).filter((c: any) => CREW_JOBS.includes(c.job)).slice(0, 6).map((c: any) => ({ name: c.name, job: c.job })),
+    trailers: (m.videos?.results ?? []).filter((v: any) => v.site === 'YouTube' && v.type === 'Trailer').slice(0, 3).map((v: any) => ({ name: v.name, site: 'YouTube', key: v.key })),
     watchProviders: { AR: { stream: names(ar.flatrate), rent: names(ar.rent), buy: names(ar.buy) } },
   });
-
-  const data = {
-    title: m.title,
-    overview: m.overview || "",
-    releaseDate: m.release_date || null,
-    runtime: m.runtime || null,
-    posterPath: m.poster_path,
-    backdropPath: m.backdrop_path,
-    metadata,
-    syncedAt: new Date(),
-  };
+  const data = { title: m.title, overview: m.overview || '', releaseDate: localRelease || m.release_date || null,
+    runtime: m.runtime || null, posterPath: m.poster_path, backdropPath: m.backdrop_path, metadata, syncedAt: new Date() };
   const genres = m.genres.map((g: any) => ({ where: { id: g.id }, create: { id: g.id, name: g.name } }));
-
-  return prisma.movie.upsert({
-    where: { id: m.id },
-    create: { id: m.id, ...data, genres: { connectOrCreate: genres } },
-    update: { ...data, genres: { set: [], connectOrCreate: genres } },
-    include: { genres: true },
-  });
+  return prisma.movie.upsert({ where: { tmdbId: m.id }, create: { tmdbId: m.id, ...data, genres: { connectOrCreate: genres } },
+    update: { ...data, genres: { set: [], connectOrCreate: genres } }, include: { genres: true } });
 }
-
-// Devuelve la película de la base; si no está o quedó vieja, la trae de TMDB
-export async function getOrImportMovie(id: number) {
-  const movie = await prisma.movie.findUnique({ where: { id }, include: { genres: true } });
-  const stale = !movie || Date.now() - movie.syncedAt.getTime() > MAX_AGE_MS;
-  if (!stale) return movie;
-  try {
-    return await importMovieFromTmdb(id);
-  } catch (e) {
-    if (movie) return movie;         
-    throw e;
-  }
+async function loadList(path: string) {
+  const first = await tmdb(`${path}${path.includes('?') ? '&' : '?'}page=1`);
+  const maxPages = Number(process.env.TMDB_SYNC_MAX_PAGES ?? 5);
+  if (!Number.isInteger(maxPages) || maxPages < 1 || maxPages > 500) throw new Error('TMDB_SYNC_MAX_PAGES debe estar entre 1 y 500');
+  const rows = [...first.results];
+  for (let page = 2; page <= Math.min(first.total_pages, maxPages); page++) rows.push(...(await tmdb(`${path}${path.includes('?') ? '&' : '?'}page=${page}`)).results);
+  return [...new Map(rows.map((m: any) => [m.id, m])).values()];
 }
-
-// ---- Listas que NO se guardan: se recuerdan unas horas en memoria ----
-const cache = new Map<string, { at: number; data: any }>();
-
-async function cached(key: string, ttlMs: number, load: () => Promise<any>) {
-  const hit = cache.get(key);
-  if (hit && Date.now() - hit.at < ttlMs) return hit.data;
-  const data = await load();
-  cache.set(key, { at: Date.now(), data });
-  return data;
-}
-
-const toListItem = (m: any) => ({
-  id: m.id,
-  title: m.title,
-  overview: m.overview,
-  releaseDate: m.release_date,
-  posterUrl: m.poster_path ? `https://image.tmdb.org/t/p/w342${m.poster_path}` : null,
-  rating: m.vote_average === 0 ? "-" : Number((m.vote_average / 2).toFixed(1)),
-});
-
-const SIX_HOURS = 6 * 60 * 60 * 1000;
-
-export const getNowPlaying = () =>
-  cached("now_playing", SIX_HOURS, async () => (await tmdb("/movie/now_playing?page=1")).results.map(toListItem));
-
-export const getUpcoming = () =>
-  cached("upcoming", SIX_HOURS, async () => {
-    const today = new Date().toISOString().slice(0, 10);
-    const list = (await tmdb("/movie/upcoming?page=1")).results.map(toListItem);
-    return list
-      .filter((m: any) => m.releaseDate && m.releaseDate > today)
-      .sort((a: any, b: any) => a.releaseDate.localeCompare(b.releaseDate));
-  });
-
-export const searchTmdb = (q: string) =>
-  cached(`search:${q.toLowerCase()}`, 60 * 60 * 1000, async () =>
-    (await tmdb(`/search/movie?query=${encodeURIComponent(q)}&page=1`)).results.slice(0, 20).map(toListItem));
-
-// Sincroniza el catálogo con lo vigente (al arrancar el servidor)
-export async function syncCatalog() {
-  const [popular, nowPlaying] = await Promise.all([tmdb("/movie/popular?page=1"), tmdb("/movie/now_playing?page=1")]);
-  const ids = [...new Set([...popular.results, ...nowPlaying.results].map((m: any) => m.id))];
+// Se ejecuta con catalog:sync; las rutas de la app solo consultan la base.
+export async function syncCatalog(report: (message: string) => void = () => {}) {
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Argentina/Buenos_Aires', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+  const future = new Date(Date.now() + 120 * 86400000).toISOString().slice(0,10);
+  const lists: Record<string, any[]> = {
+    popular: await loadList('/movie/popular'),
+    now_playing: await loadList('/movie/now_playing'),
+    upcoming: await loadList('/discover/movie?with_release_type=2|3&release_date.gte=' + today + '&release_date.lte=' + future + '&sort_by=primary_release_date.asc'),
+  };
+  const ids = new Set<number>(Object.values(lists).flatMap(rows => rows.map(movie => movie.id)));
+  for (const row of await prisma.movie.findMany({ where: { tmdbId: { not: null } }, select: { tmdbId: true } })) ids.add(row.tmdbId!);
+  const mapping = new Map<number, number>();
   for (const id of ids) {
-    try { await importMovieFromTmdb(id); } catch { /* si una falla, se sigue con las demás */ }
+    const movie = await importMovieFromTmdb(id);
+    mapping.set(id, movie.id);
+    report('Películas actualizadas: ' + mapping.size + '/' + ids.size);
   }
-  console.log(`Catálogo sincronizado: ${ids.length} películas`);
+  const entries = Object.entries(lists).flatMap(([kind, rows]) => rows.map((movie, position) => ({ kind, position, movieId: mapping.get(movie.id)!, tmdbRating: movie.vote_average ? movie.vote_average / 2 : null })));
+  // Reemplazamos las listas juntas; un fallo de red no debe vaciar los estrenos guardados.
+  await prisma.$transaction([prisma.catalogEntry.deleteMany(), prisma.catalogEntry.createMany({ data: entries })]);
+  return { imported: mapping.size };
 }

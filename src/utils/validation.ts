@@ -37,7 +37,7 @@ export function isRating(value: unknown) {
 export function isPhoto(value: unknown) {
   if (value === undefined || value === null) return true;
   return typeof value === "string" && value.length <= 1_500_000
-    && /^data:image\/(jpeg|jpg|png);base64,/.test(value);
+    && (/^data:image\/(jpeg|jpg|png);base64,/.test(value) || /^\/media\/[0-9a-f-]{36}\.(?:jpg|png|webp)$/.test(value) || /^https?:\/\/[^/]+\/media\/[0-9a-f-]{36}\.(?:jpg|png|webp)$/.test(value));
 }
 
 export const ROLES = ["user", "moderator", "superadmin"];

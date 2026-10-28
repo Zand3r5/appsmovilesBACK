@@ -1,21 +1,7 @@
-import type { Express } from "express";
-import { getNowPlaying, getUpcoming } from "../services/tmdb";
-import { handleError } from "../utils/http";
-
+import type { Express } from 'express';
+import { optionalAuth } from '../middlewares/auth';
+import { getMovieReleases } from '../services/movies';
 export function releaseRoutes(app: Express) {
-  app.get("/api/releases/upcoming", async (_req, res) => {
-    try {
-      res.json(await getUpcoming());
-    } catch (e) {
-      handleError(res, e);
-    }
-  });
-
-  app.get("/api/releases/now-playing", async (_req, res) => {
-    try {
-      res.json(await getNowPlaying());
-    } catch (e) {
-      handleError(res, e);
-    }
-  });
+  app.get('/api/releases/upcoming', optionalAuth, async (req, res) => res.json(await getMovieReleases('upcoming', req.userId)));
+  app.get('/api/releases/now-playing', optionalAuth, async (req, res) => res.json(await getMovieReleases('now_playing', req.userId)));
 }

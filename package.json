@@ -3,28 +3,30 @@
   "version": "1.0.0",
   "description": "",
   "main": "index.js",
-    "scripts": {
-    "dev": "tsx watch --env-file=.env src/index.ts",
-    "db:init": "prisma db push && prisma generate",
-    "db:seed": "tsx --env-file=.env prisma/seed.ts",
-    "db:studio": "prisma studio"
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "db:seed": "tsx prisma/seed.ts",
+    "start": "node dist/index.js",
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "catalog:sync": "tsx src/jobs/sync-catalog.ts",
+    "test": "tsx --test tests/*.test.ts",
+    "db:setup": "prisma generate && tsx scripts/setup-db.ts",
+    "admin:create": "tsx scripts/bootstrap-admin.ts"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "type": "commonjs",
-
-  
-
   "dependencies": {
     "@prisma/client": "^6.19.3",
     "bcrypt": "^6.0.0",
     "cors": "^2.8.6",
+    "dotenv": "^18.0.9",
     "express": "^5.3.0",
     "express-rate-limit": "^8.7.1",
     "helmet": "^8.3.0",
-    "jsonwebtoken": "^9.0.3",
-    "zod": "^4.6.7"
+    "jsonwebtoken": "^9.0.3"
   },
   "devDependencies": {
     "@types/bcrypt": "^6.0.0",

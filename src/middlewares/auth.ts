@@ -1,50 +1,52 @@
+import type { NextFunction, Request, Response } from 'express';
+import jwt from 'jsonwebtoken';
 
-import type { NextFunction, Request, Response } from "express";
-import jwt from "jsonwebtoken";
-import { prisma } from "../prisma";
+import { prisma } from '../prisma';
 
-export function signToken(userId: number) {
-  return jwt.sign({ sub: String(userId) }, process.env.JWT_SECRET!, { expiresIn: "7d" });
+// El token vence a los siete días; el cliente lo elimina al salir.
+export async function createToken(userId: number) {
+  return jwt.sign({ sub: String(userId) }, process.env.JWT_SECRET!, { expiresIn: '7d', algorithm: 'HS256' });
 }
-
-
-function readUserId(header?: string): number | null | undefined {
-  if (!header?.startsWith("Bearer ")) return null;
+async function readToken(req: Request) {
+  const header = req.headers.authorization;
+  if (!header?.startsWith('Bearer ')) return null;
+  let payload: jwt.JwtPayload;
+  try { payload = jwt.verify(header.slice(7), process.env.JWT_SECRET!, { algorithms: ['HS256'] }) as jwt.JwtPayload; }
+  catch { return null; }
+  const userId = Number(payload.sub);
+  if (!Number.isInteger(userId) || userId <= 0) return null;
+  const user = await prisma.user.findUnique({ where: { id: userId }, select: { id: true } });
+  return user ? { userId: user.id } : null;
+}
+export async function requireAuth(req: Request, res: Response, next: NextFunction) {
   try {
-    const payload = jwt.verify(header.slice(7), process.env.JWT_SECRET!) as jwt.JwtPayload;
-    return Number(payload.sub);
-  } catch {
-    return undefined;
-  }
+    const session = await readToken(req);
+    if (!session) return res.status(401).json({ error: 'Tu sesión venció, volvé a iniciar sesión' });
+    req.userId = session.userId;
+    next();
+  } catch (e) { next(e); }
 }
-
-// La ruta exige sesión
-export function requireAuth(req: Request, res: Response, next: NextFunction) {
-  const userId = readUserId(req.headers.authorization);
-  if (userId === null) return res.status(401).json({ error: "Iniciá sesión para continuar" });
-  if (userId === undefined) return res.status(401).json({ error: "Tu sesión venció, volvé a iniciar sesión" });
-  req.userId = userId;
-  next();
+export async function optionalAuth(req: Request, _res: Response, next: NextFunction) {
+  try {
+    const session = await readToken(req);
+    if (session) { req.userId = session.userId;  }
+    next();
+  } catch (e) { next(e); }
 }
-
-// La ruta funciona con o sin sesión (para saber si "yo" le di like a algo)
-export function optionalAuth(req: Request, _res: Response, next: NextFunction) {
-  const userId = readUserId(req.headers.authorization);
-  if (typeof userId === "number") req.userId = userId;
-  next();
-}
-
-// La ruta exige un rol. El rol se lee de la BASE, no del token.
 export function requireRole(...roles: string[]) {
   return async (req: Request, res: Response, next: NextFunction) => {
     try {
       const user = await prisma.user.findUnique({ where: { id: req.userId! }, select: { role: true } });
-      if (!user || !roles.includes(user.role)) return res.status(403).json({ error: "No tenés permiso" });
+      if (!user || !roles.includes(user.role)) return res.status(403).json({ error: 'No tenés permiso' });
       next();
-    } catch {
-      res.status(500).json({ error: "Error inesperado" });
-    }
+    } catch (e) { next(e); }
   };
 }
-
 export const publicUserSelect = { id: true, name: true, role: true } as const;
+export async function sessionUser(id: number) {
+  const user = await prisma.user.findUniqueOrThrow({ where: { id }, select: {
+    id: true, name: true, email: true, role: true,
+    likes: { select: { reviewId: true } }, reposts: { select: { reviewId: true } },
+  } });
+  return { ...user, likes: user.likes.map(x => x.reviewId), reposts: user.reposts.map(x => x.reviewId) };
+}

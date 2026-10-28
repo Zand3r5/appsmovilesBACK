@@ -17,7 +17,7 @@ export async function getFriendsRatings(userId: number | undefined, movieIds: nu
   if (friendIds.length === 0) return result;
   const rows = await prisma.review.groupBy({
     by: ["movieId"],
-    where: { movieId: { in: movieIds }, authorId: { in: friendIds } },
+    where: { rating: { not: null }, movieId: { in: movieIds }, authorId: { in: friendIds } },
     _avg: { rating: true },
     _count: { _all: true },
   });
