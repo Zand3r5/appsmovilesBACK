@@ -27,5 +27,8 @@ export async function subscribeToRelease(userId: number, movieId: number) {
   return reminderDTO(row);
 }
 export async function unsubscribeFromRelease(userId: number, movieId: number) {
-  await prisma.releaseReminder.deleteMany({ where: { userId, movieId } });
+  await prisma.$transaction([
+    prisma.releaseReminder.deleteMany({ where: { userId, movieId } }),
+    prisma.pushDelivery.updateMany({ where: { userId, movieId, status: { in: ['pending', 'sending'] } }, data: { status: 'canceled' } }),
+  ]);
 }

@@ -72,7 +72,7 @@ export async function toMovieListDTO(movies: MovieRecord[], userId?: number) {
   const [stats, friends] = await Promise.all([getMovieStats(ids), getFriendsRatings(userId, ids)]);
   return movies.map((m) => toMovieDTO(m, stats.get(m.id), friends.get(m.id)));
 }
-// Las rutas validan la petición; acá consultamos y ordenamos el catálogo.
+// Catalog rules live here. Routes only validate the request and send the result.
 export function compareMovieRatings(a: { communityRating: number | null; title: string; id: number }, b: { communityRating: number | null; title: string; id: number }) {
   return (b.communityRating ?? -1) - (a.communityRating ?? -1) || a.title.localeCompare(b.title, 'es') || a.id - b.id;
 }
@@ -117,20 +117,23 @@ export async function getMovieRecommendations(id: number, userId?: number) {
     where: { id: { not: id }, hidden: false, genres: { some: { id: { in: movie.genres.map(g => g.id) } } } },
     include: { genres: true },
   });
-  // Ordenamos todos los candidatos antes de elegir los seis recomendados.
+  // Rank the full candidate set before limiting, so the best match cannot be missed.
   return (await toMovieListDTO(candidates, userId)).sort(compareMovieRatings).slice(0, 6);
 }
 
-async function movieFields(body: unknown, userId: number, current: { metadata: string } | null) {
-  const input = validateMovieInput(body, current !== null);
+export async function saveMovie(body: unknown, userId: number, id?: number) {
+  const input = validateMovieInput(body, id !== undefined);
   if (input.posterUrl !== undefined) input.posterUrl = await imageReference(input.posterUrl, userId, true);
   if (input.backdropUrl !== undefined) input.backdropUrl = await imageReference(input.backdropUrl, userId, true);
+  const movie = await prisma.$transaction(async tx => {
+    const current = id === undefined ? null : await tx.movie.findUnique({ where: { id } });
+    if (id !== undefined && !current) fail(404, 'Película no encontrada');
     const genreIds: number[] = [];
     for (const name of [...new Set(input.genres ?? [])]) {
-      let genre = await prisma.genre.findFirst({ where: { name } });
+      let genre = await tx.genre.findFirst({ where: { name } });
       if (!genre) {
-        const min = await prisma.genre.aggregate({ _min: { id: true } });
-        genre = await prisma.genre.create({ data: { id: Math.min(0, min._min.id ?? 0) - 1, name } });
+        const min = await tx.genre.aggregate({ _min: { id: true } });
+        genre = await tx.genre.create({ data: { id: Math.min(0, min._min.id ?? 0) - 1, name } });
       }
       genreIds.push(genre.id);
     }
@@ -143,24 +146,19 @@ async function movieFields(body: unknown, userId: number, current: { metadata: s
       runtime: input.runtime, posterPath: input.posterUrl, backdropPath: input.backdropUrl, featured: input.featured,
       metadata: JSON.stringify(metadata),
     };
-
-    return { input, data, genreIds };
-}
-export async function createMovie(body: unknown, userId: number) {
-  const { input, data, genreIds } = await movieFields(body, userId, null);
-  const movie = await prisma.movie.create({ data: { ...data, title: input.title!, overview: input.overview!, genres: { connect: genreIds.map(id => ({ id })) } }, include: { genres: true } });
-  return (await toMovieListDTO([movie], userId))[0];
-}
-export async function updateMovie(body: unknown, userId: number, id: number) {
-  const current = await prisma.movie.findUnique({ where: { id } });
-  if (!current) fail(404, 'Película no encontrada');
-  const { input, data, genreIds } = await movieFields(body, userId, current);
-  const movie = await prisma.movie.update({ where: { id }, data: { ...data, ...(input.genres !== undefined ? { genres: { set: genreIds.map(id => ({ id })) } } : {}) }, include: { genres: true } });
-  return (await toMovieListDTO([movie], userId))[0];
+    if (id === undefined) return tx.movie.create({ data: {
+      ...data, title: input.title!, overview: input.overview!, genres: { connect: genreIds.map(id => ({ id })) },
+    }, include: { genres: true } });
+    return tx.movie.update({ where: { id }, data: {
+      ...data, ...(input.genres !== undefined ? { genres: { set: genreIds.map(id => ({ id })) } } : {}),
+    }, include: { genres: true } });
+  });
+  const [dto] = await toMovieListDTO([movie], userId);
+  return dto;
 }
 
 export async function hideMovie(id: number) {
-  // Ocultamos sin borrar reseñas; una importación posterior no revierte la moderación.
+  // A daily import must not undo moderation or delete reviews.
   await prisma.movie.update({ where: { id }, data: { hidden: true } });
 }
 

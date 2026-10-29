@@ -1,14 +1,29 @@
+import { randomUUID } from 'node:crypto';
 import { prisma } from '../prisma';
 const BASE = 'https://api.themoviedb.org/3';
 const CREW_JOBS = ['Screenplay', 'Director of Photography', 'Original Music Composer', 'Editor', 'Producer'];
 async function tmdb(path: string): Promise<any> {
-  if (!process.env.TMDB_KEY) throw new Error('Falta TMDB_KEY en .env');
-  const url = new URL((process.env.TMDB_BASE_URL ?? BASE) + path);
+  if (!process.env.TMDB_KEY) throw new Error('Falta TMDB_KEY en backend/.env');
+  const url = new URL(`${process.env.TMDB_BASE_URL ?? BASE}${path}`);
   url.searchParams.set('api_key', process.env.TMDB_KEY);
-  url.searchParams.set('language', 'es-AR'); url.searchParams.set('region', 'AR');
-  const response = await fetch(url, { signal: AbortSignal.timeout(15000) });
-  if (!response.ok) throw new Error('TMDB respondió ' + response.status);
-  return response.json();
+  url.searchParams.set('language', 'es-AR');
+  url.searchParams.set('region', 'AR');
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const response = await fetch(url, { signal: AbortSignal.timeout(15000) });
+      if (!response.ok) {
+        if ((response.status === 429 || response.status >= 500) && attempt < 2) {
+          await new Promise(resolve => setTimeout(resolve, Math.min(Number(response.headers.get('retry-after') ?? 2), 30) * 1000));
+          continue;
+        }
+        throw new Error(`TMDB respondió ${response.status} para ${url.pathname}`);
+      }
+      return await response.json();
+    } catch (e) {
+      if (attempt === 2 || (e instanceof Error && e.message.startsWith('TMDB respondió'))) throw e;
+      await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1)));
+    }
+  }
 }
 const names = (list: any[] = []) => list.map(p => p.provider_name);
 export async function importMovieFromTmdb(tmdbId: number) {
@@ -37,25 +52,66 @@ async function loadList(path: string) {
   for (let page = 2; page <= Math.min(first.total_pages, maxPages); page++) rows.push(...(await tmdb(`${path}${path.includes('?') ? '&' : '?'}page=${page}`)).results);
   return [...new Map(rows.map((m: any) => [m.id, m])).values()];
 }
-// Se ejecuta con catalog:sync; las rutas de la app solo consultan la base.
 export async function syncCatalog(report: (message: string) => void = () => {}) {
-  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Argentina/Buenos_Aires', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
-  const future = new Date(Date.now() + 120 * 86400000).toISOString().slice(0,10);
-  const lists: Record<string, any[]> = {
-    popular: await loadList('/movie/popular'),
-    now_playing: await loadList('/movie/now_playing'),
-    upcoming: await loadList('/discover/movie?with_release_type=2|3&release_date.gte=' + today + '&release_date.lte=' + future + '&sort_by=primary_release_date.asc'),
-  };
-  const ids = new Set<number>(Object.values(lists).flatMap(rows => rows.map(movie => movie.id)));
-  for (const row of await prisma.movie.findMany({ where: { tmdbId: { not: null } }, select: { tmdbId: true } })) ids.add(row.tmdbId!);
-  const mapping = new Map<number, number>();
-  for (const id of ids) {
-    const movie = await importMovieFromTmdb(id);
-    mapping.set(id, movie.id);
-    report('Películas actualizadas: ' + mapping.size + '/' + ids.size);
+  report('Iniciando sincronización TMDB…');
+  const owner = randomUUID(), name = 'tmdb-catalog';
+  const acquired = await prisma.$transaction(async tx => {
+    await tx.jobLock.deleteMany({ where: { name, expiresAt: { lt: new Date() } } });
+    try { await tx.jobLock.create({ data: { name, owner, expiresAt: new Date(Date.now() + 10 * 60000) } }); return true; }
+    catch (e: any) { if (e.code === 'P2002') return false; throw e; }
+  });
+  if (!acquired) { report('Ya hay una sincronización en curso; no se inició otra.'); return { skipped: true }; }
+  const run = await prisma.syncRun.create({ data: {} });
+  let lockLost = false;
+  const heartbeat = setInterval(() => {
+    prisma.jobLock.updateMany({ where: { name, owner }, data: { expiresAt: new Date(Date.now() + 10 * 60000) } })
+      .then(r => { if (!r.count) lockLost = true; }).catch(() => { lockLost = true; });
+  }, 60000);
+  let imported = 0;
+  try {
+    const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Argentina/Buenos_Aires', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+    const future = new Date(Date.now() + 120 * 86400000).toISOString().slice(0, 10);
+    const load = async (label: string, path: string) => {
+      report(`Cargando lista: ${label}…`);
+      const rows = await loadList(path);
+      report(`${label}: ${rows.length} películas encontradas.`);
+      return rows;
+    };
+    const lists: Record<string, any[]> = {
+      popular: await load('Populares', '/movie/popular'),
+      now_playing: await load('Cartelera', '/movie/now_playing'),
+      upcoming: await load('Próximas', `/discover/movie?with_release_type=2|3&release_date.gte=${today}&release_date.lte=${future}&sort_by=primary_release_date.asc`),
+    };
+    const ids = new Set<number>(Object.values(lists).flatMap(rows => rows.map(m => m.id)));
+    // Refresh saved TMDB movies as well, preserving reviews and editorial flags.
+    const saved = await prisma.movie.findMany({ where: { tmdbId: { not: null } }, select: { tmdbId: true } });
+    for (const m of saved) ids.add(m.tmdbId!);
+    report(`Actualizando detalles de ${ids.size} películas. Esto puede tardar unos minutos…`);
+    const mapping = new Map<number, number>();
+    for (const id of ids) {
+      if (lockLost) throw new Error('Se perdió el bloqueo de sincronización');
+      const movie = await importMovieFromTmdb(id);
+      mapping.set(id, movie.id); imported++;
+      if (imported % 10 === 0 || imported === ids.size) report(`Películas actualizadas: ${imported}/${ids.size}`);
+    }
+    report('Guardando las listas actualizadas…');
+    await prisma.$transaction(async tx => {
+      const lock = await tx.jobLock.findFirst({ where: { name, owner, expiresAt: { gt: new Date() } } });
+      if (!lock || lockLost) throw new Error('Se perdió el bloqueo de sincronización');
+      // Only replace membership once every list and movie was successfully fetched.
+      await tx.catalogEntry.deleteMany();
+      for (const [kind, rows] of Object.entries(lists)) {
+        await tx.catalogEntry.createMany({ data: rows.map((m, position) => ({ kind, position, movieId: mapping.get(m.id)!, tmdbRating: m.vote_average ? m.vote_average / 2 : null })) });
+      }
+      await tx.syncRun.update({ where: { id: run.id }, data: { status: 'success', imported, finishedAt: new Date() } });
+    });
+    report(`Sincronización completa: ${imported} películas actualizadas.`);
+    return { imported };
+  } catch (error) {
+    await prisma.syncRun.update({ where: { id: run.id }, data: { status: 'failed', imported, error: error instanceof Error ? error.message : String(error), finishedAt: new Date() } });
+    throw error;
+  } finally {
+    clearInterval(heartbeat);
+    await prisma.jobLock.deleteMany({ where: { name, owner } });
   }
-  const entries = Object.entries(lists).flatMap(([kind, rows]) => rows.map((movie, position) => ({ kind, position, movieId: mapping.get(movie.id)!, tmdbRating: movie.vote_average ? movie.vote_average / 2 : null })));
-  // Reemplazamos las listas juntas; un fallo de red no debe vaciar los estrenos guardados.
-  await prisma.$transaction([prisma.catalogEntry.deleteMany(), prisma.catalogEntry.createMany({ data: entries })]);
-  return { imported: mapping.size };
 }

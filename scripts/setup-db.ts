@@ -2,7 +2,6 @@ import '../src/config';
 import { mkdir, open, copyFile } from 'node:fs/promises';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { awardAchievements } from '../src/services/gamification';
 import { seedReferenceData } from '../prisma/reference';
 import { prisma } from '../src/prisma';
 async function main() {
@@ -26,7 +25,7 @@ async function main() {
   }
   await prisma.$disconnect();
   run(['migrate', 'deploy']);
+  run(['generate']);
   await seedReferenceData();
-  for (const user of await prisma.user.findMany({ select: { id: true } })) await awardAchievements(user.id);
 }
 main().catch(error => { console.error(error); process.exitCode = 1; }).finally(() => prisma.$disconnect());

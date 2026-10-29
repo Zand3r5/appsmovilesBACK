@@ -1,37 +1,94 @@
-// La distancia se calcula en el servidor; solo devolvemos cines dentro del radio pedido.
+import { z } from 'zod';
+import { prisma } from '../prisma';
 import { fail } from '../utils/http';
+export const cinemaQuery = z.object({
+  lat: z.number().min(-90).max(90), lng: z.number().min(-180).max(180),
+  radiusM: z.number().int().min(1000).max(50000).default(15000),
+}).strict();
+const cinema = z.object({ id: z.string(), name: z.string(), address: z.string().nullable(), lat: z.number().min(-90).max(90), lng: z.number().min(-180).max(180) });
+type SavedCinema = z.infer<typeof cinema>;
+const TTL = 6 * 3600000, MAX_STALE = 24 * 3600000;
+const pending = new Map<string, Promise<{ data: SavedCinema[]; fetchedAt: Date }>>();
 export function distanceKm(lat1: number, lng1: number, lat2: number, lng2: number) {
   const radians = (n: number) => n * Math.PI / 180;
-  const a = Math.sin(radians(lat2-lat1)/2)**2 + Math.cos(radians(lat1))*Math.cos(radians(lat2))*Math.sin(radians(lng2-lng1)/2)**2;
+  const a = Math.sin(radians(lat2 - lat1) / 2) ** 2 + Math.cos(radians(lat1)) * Math.cos(radians(lat2)) * Math.sin(radians(lng2 - lng1) / 2) ** 2;
   return 2 * 6371 * Math.asin(Math.min(1, Math.sqrt(a)));
 }
-export async function getNearbyCinemas(body: any) {
-  const lat = body?.lat, lng = body?.lng, radiusM = body?.radiusM ?? 15000;
-  if (typeof lat !== 'number' || !Number.isFinite(lat) || Math.abs(lat) > 90 || typeof lng !== 'number' || !Number.isFinite(lng) || Math.abs(lng) > 180 || !Number.isInteger(radiusM) || radiusM < 1000 || radiusM > 50000) fail(400, 'Ubicación o radio inválido. El radio debe estar entre 1 y 50 km');
-  let elements: any[];
-  try {
-    const response = await fetch(process.env.OVERPASS_URL ?? 'https://overpass-api.de/api/interpreter', {
-      method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'User-Agent': 'WhatNext/1.0' },
-      body: 'data=' + encodeURIComponent(`[out:json][timeout:6];nwr["amenity"="cinema"](around:${radiusM},${lat},${lng});out center tags;`),
-      signal: AbortSignal.timeout(10000),
-    });
-    if (!response.ok) throw new Error('Overpass no respondió');
-    const data: any = await response.json();
-    if (!Array.isArray(data.elements) || data.remark) throw new Error('Respuesta incompleta');
-    elements = data.elements;
-  } catch { fail(503, 'No pudimos consultar los cines. Intentá de nuevo en unos minutos'); }
-  const cinemas: Array<{ id: string; name: string; address: string | null; lat: number; lng: number; distanceKm: number }> = [];
-  for (const element of elements) {
-    if (!element || !['node','way','relation'].includes(element.type) || !Number.isInteger(element.id)) continue;
-    const latitude = element.lat ?? element.center?.lat, longitude = element.lon ?? element.center?.lon;
-    if (typeof latitude !== 'number' || !Number.isFinite(latitude) || Math.abs(latitude) > 90 || typeof longitude !== 'number' || !Number.isFinite(longitude) || Math.abs(longitude) > 180) continue;
-    const id = element.type + '/' + element.id;
-    const distance = distanceKm(lat,lng,latitude,longitude);
-    if (distance > radiusM/1000 || cinemas.some(row => row.id === id)) continue;
-    const tags = element.tags ?? {};
-    const address = [tags['addr:street'],tags['addr:housenumber']].filter(value => typeof value === 'string').join(' ');
-    cinemas.push({ id, name: typeof tags.name === 'string' ? tags.name : 'Cine sin nombre', address: address || null, lat: latitude, lng: longitude, distanceKm: distance });
+async function queryOverpass(lat: number, lng: number, radiusM: number): Promise<SavedCinema[]> {
+  const query = `[out:json][timeout:6];nwr["amenity"="cinema"](around:${radiusM},${lat},${lng});out center tags;`;
+  const endpoints = process.env.OVERPASS_URL
+    ? [process.env.OVERPASS_URL, process.env.OVERPASS_URL]
+    : ['https://overpass-api.de/api/interpreter', 'https://overpass.private.coffee/api/interpreter'];
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const endpoint = new URL(endpoints[attempt]);
+      const useGet = attempt > 0;
+      if (useGet) endpoint.searchParams.set('data', query);
+      const response = await fetch(endpoint, {
+        method: useGet ? 'GET' : 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'User-Agent': 'WhatNext/1.0' },
+        body: useGet ? undefined : `data=${encodeURIComponent(query)}`, signal: AbortSignal.timeout(7000),
+      });
+      if (!response.ok) throw new Error('Overpass no respondió');
+      const body = await response.json() as { elements?: unknown[]; remark?: string };
+      // Overpass can return HTTP 200 with a runtime/timeout error and incomplete results.
+      if (!Array.isArray(body.elements) || body.remark) throw new Error('Respuesta de cines incompleta');
+      const rows: SavedCinema[] = [];
+      for (const value of body.elements) {
+        const el = value as any;
+        if (!['node', 'way', 'relation'].includes(el?.type) || !Number.isInteger(el.id)) continue;
+        const tags = el.tags ?? {};
+        const address = [tags['addr:street'], tags['addr:housenumber']].filter(x => typeof x === 'string').join(' ');
+        const parsed = cinema.safeParse({ id: `${el.type}/${el.id}`, name: tags.name ?? 'Cine sin nombre', address: address || null, lat: el.lat ?? el.center?.lat, lng: el.lon ?? el.center?.lon });
+        if (parsed.success) rows.push(parsed.data);
+      }
+      return [...new Map(rows.map(c => [c.id, c])).values()];
+    } catch {
+      if (attempt === 1) fail(503, 'No pudimos consultar los cines. Intentá de nuevo en unos minutos');
+      await new Promise(resolve => setTimeout(resolve, 300));
+    }
   }
-  cinemas.sort((a,b) => a.distanceKm-b.distanceKm || a.id.localeCompare(b.id));
-  return { cinemas: cinemas.slice(0,20), source: 'live', updatedAt: new Date().toISOString() };
+  return [];
+}
+async function fetchAndCache(key: string, lat: number, lng: number, radiusM: number) {
+  const data = await queryOverpass(lat, lng, radiusM + 1000);
+  const fetchedAt = new Date(), expiresAt = new Date(Date.now() + TTL);
+  await prisma.cinemaLookup.upsert({ where: { key }, create: { key, data: JSON.stringify(data), fetchedAt, expiresAt }, update: { data: JSON.stringify(data), fetchedAt, expiresAt } });
+  await prisma.cinemaLookup.deleteMany({ where: { fetchedAt: { lt: new Date(Date.now() - MAX_STALE) } } });
+  // Bound the cache even if many distinct areas are queried within a day.
+  const excess = await prisma.cinemaLookup.findMany({ orderBy: [{ fetchedAt: 'desc' }, { key: 'asc' }], skip: 1000, select: { key: true } });
+  if (excess.length) await prisma.cinemaLookup.deleteMany({ where: { key: { in: excess.map(c => c.key) } } });
+  return { data, fetchedAt };
+}
+export async function getNearbyCinemas(body: unknown) {
+  const parsed = cinemaQuery.safeParse(body);
+  if (!parsed.success) fail(400, 'Ubicación o radio inválido. El radio debe estar entre 1 y 50 km');
+  const { lat, lng, radiusM } = parsed.data;
+  // Reuse an area cache without storing an account's precise GPS coordinates.
+  const centerLat = Number(lat.toFixed(2)), centerLng = Number(lng.toFixed(2));
+  const key = `${centerLat.toFixed(2)}:${centerLng.toFixed(2)}:${radiusM}`;
+  const row = await prisma.cinemaLookup.findUnique({ where: { key } });
+  let cached: SavedCinema[] | null = null;
+  try { if (row) cached = z.array(cinema).parse(JSON.parse(row.data)); } catch { /* replace corrupt cached data */ }
+  let data: SavedCinema[], fetchedAt: Date, source: 'live' | 'cache' | 'stale';
+  if (row && cached && row.expiresAt > new Date()) {
+    data = cached; fetchedAt = row.fetchedAt; source = 'cache';
+  } else {
+    try {
+      let work = pending.get(key);
+      if (!work) {
+        work = fetchAndCache(key, centerLat, centerLng, radiusM);
+        pending.set(key, work);
+        // Cleanup without creating an unhandled rejected promise.
+        void work.then(() => pending.delete(key), () => pending.delete(key));
+      }
+      const fresh = await work;
+      data = fresh.data; fetchedAt = fresh.fetchedAt; source = 'live';
+    } catch (error) {
+      if (!row || !cached || Date.now() - row.fetchedAt.getTime() > MAX_STALE) throw error;
+      data = cached; fetchedAt = row.fetchedAt; source = 'stale';
+    }
+  }
+  const cinemas = data.map(c => ({ ...c, distanceKm: distanceKm(lat, lng, c.lat, c.lng) }))
+    .filter(c => c.distanceKm <= radiusM / 1000).sort((a, b) => a.distanceKm - b.distanceKm || a.id.localeCompare(b.id)).slice(0, 20);
+  return { cinemas, source, updatedAt: fetchedAt.toISOString() };
 }
