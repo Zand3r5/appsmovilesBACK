@@ -15,7 +15,6 @@
     "catalog:sync": "tsx src/jobs/sync-catalog.ts",
     "worker": "tsx src/worker.ts",
     "worker:start": "node dist/worker.js",
-    "test": "tsx --test tests/*.test.ts",
     "db:setup": "prisma generate && tsx scripts/setup-db.ts",
     "db:backup": "tsx scripts/backup-db.ts",
     "media:migrate": "tsx scripts/migrate-images.ts",
@@ -31,6 +30,7 @@
     "@prisma/client": "^6.19.3",
     "bcrypt": "^6.0.0",
     "cors": "^2.8.6",
+    "csv-parse": "^7.0.3",
     "dotenv": "^18.0.9",
     "express": "^5.3.0",
     "express-rate-limit": "^8.7.1",
@@ -47,10 +47,9 @@
     "@types/express": "^5.0.6",
     "@types/jsonwebtoken": "^9.0.10",
     "@types/node": "^26.6.5",
-    "fflate": "^0.8.3",
+    "concurrently": "^10.0.6",
     "prisma": "^6.19.3",
     "tsx": "^4.23.15",
-    "typescript": "^6.0.3",
-    "concurrently": "^10.0.6"
+    "typescript": "^6.0.3"
   }
 }
