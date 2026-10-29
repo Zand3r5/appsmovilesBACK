@@ -86,5 +86,11 @@ export function reviewRoutes(app: Express) {
     });
   }
   app.get('/api/feed/popular', optionalAuth, async (req, res) => res.json((await listReviews({}, req.userId, true)).slice(0, 10)));
-  app.get('/api/feed/friends', requireAuth, async (req, res) => res.json((await listReviews({ authorId: { in: await getFriendIds(req.userId!) } }, req.userId)).slice(0, 10)));
+  app.get('/api/feed/friends', requireAuth, async (req, res) => {
+    const friendIds = await getFriendIds(req.userId!);
+    if (!friendIds.length) return res.json([]);
+    const rows = await prisma.review.findMany({ where: { authorId: { in: friendIds }, movie: { hidden: false } },
+      include: reviewInclude, orderBy: { createdAt: 'desc' }, take: 50 });
+    res.json(rows.map(r => reviewDTO(r, req.userId)));
+  });
 }
