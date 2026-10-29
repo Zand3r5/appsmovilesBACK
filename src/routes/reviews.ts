@@ -1,7 +1,7 @@
 import { createSocialNotification } from '../services/push';
 import type { Express } from 'express';
 import { prisma } from '../prisma';
-import { optionalAuth, requireAuth } from '../middlewares/auth';
+import { optionalAuth, publicUserSelect, requireAuth } from '../middlewares/auth';
 import { cleanText, isPhoto, isRating, parseId } from '../utils/validation';
 import { fail } from '../utils/http';
 import { listReviews, reviewDTO, reviewInclude } from '../services/reviews';
@@ -86,5 +86,18 @@ export function reviewRoutes(app: Express) {
     });
   }
   app.get('/api/feed/popular', optionalAuth, async (req, res) => res.json((await listReviews({}, req.userId, true)).slice(0, 10)));
-  app.get('/api/feed/friends', requireAuth, async (req, res) => res.json((await listReviews({ authorId: { in: await getFriendIds(req.userId!) } }, req.userId)).slice(0, 10)));
+  app.get('/api/feed/friends', requireAuth, async (req, res) => {
+    const friendIds = await getFriendIds(req.userId!);
+    if (friendIds.length === 0) return res.json([]);
+    const [rows, reposts] = await Promise.all([
+      prisma.review.findMany({ where: { authorId: { in: friendIds }, movie: { hidden: false } }, include: reviewInclude, orderBy: { createdAt: 'desc' }, take: 50 }),
+      prisma.repost.findMany({ where: { userId: { in: friendIds }, review: { authorId: { not: req.userId! }, movie: { hidden: false } } }, include: { user: { select: publicUserSelect }, review: { include: reviewInclude } }, orderBy: { createdAt: 'desc' }, take: 50 }),
+    ]);
+    const items = [
+      ...rows.map(r => ({ at: r.createdAt, review: reviewDTO(r, req.userId) })),
+      ...reposts.map(r => ({ at: r.createdAt, review: { ...reviewDTO(r.review, req.userId), repostedBy: r.user } })),
+    ].sort((a, b) => b.at.getTime() - a.at.getTime());
+    const seen = new Set<number>();
+    res.json(items.filter(i => !seen.has(i.review.id) && !!seen.add(i.review.id)).slice(0, 50).map(i => i.review));
+  });
 }

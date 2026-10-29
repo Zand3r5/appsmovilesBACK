@@ -23,6 +23,7 @@ test('Database API, credential-checked sessions, permissions, rewards and schedu
   let tmdbRequests = 0, failTmdb = false;
   const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
   const past = '2026-01-01';
+  const recent = new Date(Date.now() - 5 * 86400000).toISOString().slice(0, 10);
   const fakeTmdb = createServer((req, res) => {
     tmdbRequests++;
     const url = new URL(req.url!, 'http://fixture');
@@ -33,7 +34,7 @@ test('Database API, credential-checked sessions, permissions, rewards and schedu
       const id = Number(detail[1]);
       return res.end(JSON.stringify({ id, title: `Movie ${id}`, overview: 'Test movie', release_date: id === 103 ? tomorrow : past,
         runtime: 120, poster_path: '/poster.jpg', backdrop_path: '/backdrop.jpg', genres: [{ id: 18, name: 'Drama' }], credits: { cast: [], crew: [] }, videos: { results: [] },
-        'watch/providers': { results: {} }, release_dates: { results: [] } }));
+        'watch/providers': { results: {} }, release_dates: { results: id === 102 ? [{ iso_3166_1: 'AR', release_dates: [{ type: 3, release_date: `${recent}T00:00:00.000Z`, note: '' }] }] : [] } }));
     }
     const ids = url.pathname === '/movie/popular' ? [101, 102] : url.pathname === '/movie/now_playing' ? [102] : [103];
     res.end(JSON.stringify({ total_pages: 1, results: ids.map(id => ({ id, vote_average: 8, release_date: id === 103 ? tomorrow : past })) }));

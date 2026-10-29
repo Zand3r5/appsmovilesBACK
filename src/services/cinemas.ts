@@ -15,39 +15,61 @@ export function distanceKm(lat1: number, lng1: number, lat2: number, lng2: numbe
   return 2 * 6371 * Math.asin(Math.min(1, Math.sqrt(a)));
 }
 async function queryOverpass(lat: number, lng: number, radiusM: number): Promise<SavedCinema[]> {
-  const query = `[out:json][timeout:6];nwr["amenity"="cinema"](around:${radiusM},${lat},${lng});out center tags;`;
+  const query = `[out:json][timeout:25];nwr["amenity"="cinema"](around:${radiusM},${lat},${lng});out center tags;`;
   const endpoints = process.env.OVERPASS_URL
-    ? [process.env.OVERPASS_URL, process.env.OVERPASS_URL]
+    ? [process.env.OVERPASS_URL]
     : ['https://overpass-api.de/api/interpreter', 'https://overpass.private.coffee/api/interpreter'];
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      const endpoint = new URL(endpoints[attempt]);
-      const useGet = attempt > 0;
-      if (useGet) endpoint.searchParams.set('data', query);
-      const response = await fetch(endpoint, {
-        method: useGet ? 'GET' : 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'User-Agent': 'WhatNext/1.0' },
-        body: useGet ? undefined : `data=${encodeURIComponent(query)}`, signal: AbortSignal.timeout(7000),
-      });
-      if (!response.ok) throw new Error('Overpass no respondió');
-      const body = await response.json() as { elements?: unknown[]; remark?: string };
-      // Overpass can return HTTP 200 with a runtime/timeout error and incomplete results.
-      if (!Array.isArray(body.elements) || body.remark) throw new Error('Respuesta de cines incompleta');
-      const rows: SavedCinema[] = [];
-      for (const value of body.elements) {
-        const el = value as any;
-        if (!['node', 'way', 'relation'].includes(el?.type) || !Number.isInteger(el.id)) continue;
-        const tags = el.tags ?? {};
-        const address = [tags['addr:street'], tags['addr:housenumber']].filter(x => typeof x === 'string').join(' ');
-        const parsed = cinema.safeParse({ id: `${el.type}/${el.id}`, name: tags.name ?? 'Cine sin nombre', address: address || null, lat: el.lat ?? el.center?.lat, lng: el.lon ?? el.center?.lon });
-        if (parsed.success) rows.push(parsed.data);
-      }
-      return [...new Map(rows.map(c => [c.id, c])).values()];
-    } catch {
-      if (attempt === 1) fail(503, 'No pudimos consultar los cines. Intentá de nuevo en unos minutos');
-      await new Promise(resolve => setTimeout(resolve, 300));
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 25000);
+  async function ask(url: string): Promise<SavedCinema[]> {
+    const response = await fetch(url, {
+      method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'User-Agent': 'WhatNext/1.0' },
+      body: `data=${encodeURIComponent(query)}`, signal: controller.signal,
+    });
+    if (!response.ok) throw new Error('Overpass no respondió');
+    const body = await response.json() as { elements?: unknown[]; remark?: string };
+    // Overpass can return HTTP 200 with a runtime/timeout error and incomplete results.
+    if (!Array.isArray(body.elements) || body.remark) throw new Error('Respuesta de cines incompleta');
+    const rows: SavedCinema[] = [];
+    for (const value of body.elements) {
+      const el = value as any;
+      if (!['node', 'way', 'relation'].includes(el?.type) || !Number.isInteger(el.id)) continue;
+      const tags = el.tags ?? {};
+      const address = [tags['addr:street'], tags['addr:housenumber']].filter(x => typeof x === 'string').join(' ');
+      const parsed = cinema.safeParse({ id: `${el.type}/${el.id}`, name: tags.name ?? 'Cine sin nombre', address: address || null, lat: el.lat ?? el.center?.lat, lng: el.lon ?? el.center?.lon });
+      if (parsed.success) rows.push(parsed.data);
     }
+    return [...new Map(rows.map(c => [c.id, c])).values()];
   }
-  return [];
+  async function askNominatim(): Promise<SavedCinema[]> {
+    const dLat = radiusM / 111320, dLng = radiusM / (111320 * Math.max(0.01, Math.cos(lat * Math.PI / 180)));
+    const url = new URL(process.env.NOMINATIM_URL || 'https://nominatim.openstreetmap.org/search');
+    url.search = new URLSearchParams({
+      format: 'jsonv2', amenity: 'cinema', limit: '40', bounded: '1', addressdetails: '1',
+      viewbox: [lng - dLng, lat + dLat, lng + dLng, lat - dLat].join(','),
+    }).toString();
+    const response = await fetch(url, { headers: { 'User-Agent': 'WhatNext/1.0', 'Accept-Language': 'es' }, signal: controller.signal });
+    if (!response.ok) throw new Error('Nominatim no respondió');
+    const body = await response.json();
+    if (!Array.isArray(body)) throw new Error('Respuesta de cines incompleta');
+    const rows: SavedCinema[] = [];
+    for (const el of body as any[]) {
+      if (!['node', 'way', 'relation'].includes(el?.osm_type) || !Number.isInteger(el.osm_id)) continue;
+      const address = [el.address?.road, el.address?.house_number].filter(x => typeof x === 'string').join(' ');
+      const parsed = cinema.safeParse({ id: `${el.osm_type}/${el.osm_id}`, name: el.name || 'Cine sin nombre', address: address || null, lat: Number(el.lat), lng: Number(el.lon) });
+      if (parsed.success) rows.push(parsed.data);
+    }
+    return [...new Map(rows.map(c => [c.id, c])).values()];
+  }
+  try {
+    const useNominatim = !process.env.OVERPASS_URL || !!process.env.NOMINATIM_URL;
+    return await Promise.any([...endpoints.map(ask), ...(useNominatim ? [askNominatim()] : [])]);
+  } catch {
+    fail(503, 'No pudimos consultar los cines. Intentá de nuevo en unos minutos');
+  } finally {
+    clearTimeout(timer);
+    controller.abort();
+  }
 }
 async function fetchAndCache(key: string, lat: number, lng: number, radiusM: number) {
   const data = await queryOverpass(lat, lng, radiusM + 1000);
