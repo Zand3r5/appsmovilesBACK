@@ -1,0 +1,53 @@
+services:
+  migrate:
+    build: ..
+    env_file: ../.env.production
+    command: npm run db:setup
+    volumes:
+      - data:/data
+    restart: "no"
+  api:
+    build: ..
+    env_file: ../.env.production
+    command: npm start
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    volumes:
+      - data:/data
+      - ../credentials:/run/secrets/whatnext:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+  worker:
+    build: ..
+    env_file: ../.env.production
+    command: npm run worker:start
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    volumes:
+      - data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "const fs=require('fs');try{process.exit(Date.now()-fs.statSync('/data/worker-heartbeat').mtimeMs<120000?0:1)}catch{process.exit(1)}"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+  caddy:
+    image: caddy:2
+    env_file: .env
+    ports: ["80:80", "443:443"]
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on: [api]
+    restart: unless-stopped
+volumes:
+  data:
+  caddy_data:
+  caddy_config:

@@ -1,35 +1,37 @@
 import type { NextFunction, Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
-
+import { randomUUID } from 'node:crypto';
 import { prisma } from '../prisma';
 
-// El token vence a los siete días; el cliente lo elimina al salir.
-export async function createToken(userId: number) {
-  return jwt.sign({ sub: String(userId) }, process.env.JWT_SECRET!, { expiresIn: '7d', algorithm: 'HS256' });
+export async function createSession(userId: number) {
+  const id = randomUUID();
+  await prisma.session.create({ data: { id, userId, expiresAt: new Date(Date.now() + 7 * 86400000) } });
+  return jwt.sign({ sub: String(userId), sid: id }, process.env.JWT_SECRET!, { expiresIn: '7d', algorithm: 'HS256' });
 }
-async function readToken(req: Request) {
+async function readSession(req: Request) {
   const header = req.headers.authorization;
   if (!header?.startsWith('Bearer ')) return null;
   let payload: jwt.JwtPayload;
   try { payload = jwt.verify(header.slice(7), process.env.JWT_SECRET!, { algorithms: ['HS256'] }) as jwt.JwtPayload; }
   catch { return null; }
-  const userId = Number(payload.sub);
-  if (!Number.isInteger(userId) || userId <= 0) return null;
-  const user = await prisma.user.findUnique({ where: { id: userId }, select: { id: true } });
-  return user ? { userId: user.id } : null;
+  if (typeof payload.sid !== 'string' || !/^\d+$/.test(payload.sub ?? '')) return null;
+  const session = await prisma.session.findUnique({ where: { id: payload.sid }, include: { user: true } });
+  if (!session || session.userId !== Number(payload.sub) || session.expiresAt <= new Date()) return null;
+  return session;
 }
 export async function requireAuth(req: Request, res: Response, next: NextFunction) {
   try {
-    const session = await readToken(req);
+    const session = await readSession(req);
     if (!session) return res.status(401).json({ error: 'Tu sesión venció, volvé a iniciar sesión' });
     req.userId = session.userId;
+    req.sessionId = session.id;
     next();
   } catch (e) { next(e); }
 }
 export async function optionalAuth(req: Request, _res: Response, next: NextFunction) {
   try {
-    const session = await readToken(req);
-    if (session) { req.userId = session.userId;  }
+    const session = await readSession(req);
+    if (session) { req.userId = session.userId; req.sessionId = session.id; }
     next();
   } catch (e) { next(e); }
 }

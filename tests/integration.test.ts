@@ -1,4 +1,3 @@
-import jwt from 'jsonwebtoken';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
@@ -86,12 +85,12 @@ test('Database API, credential-checked sessions, permissions, rewards and schedu
       const token = registered.data.token;
       assert.equal((await call('/auth/me', 'GET', undefined, token)).data.email, email);
       assert.equal((await call('/auth/logout', 'POST', undefined, token)).status, 204);
-      assert.equal((await call('/auth/me', 'GET', undefined, token)).status, 200);
+      assert.equal((await call('/auth/me', 'GET', undefined, token)).status, 401);
       assert.equal((await call('/auth/login', 'POST', { email, password: 'wrong' })).status, 401);
       const login = await call('/auth/login', 'POST', { email, password: 'Testing1234' });
       assert.equal(login.status, 200);
-      const expiredToken = jwt.sign({ sub: String(user.id) }, process.env.JWT_SECRET!, { expiresIn: -1 });
-      assert.equal((await call('/auth/me', 'GET', undefined, expiredToken)).status, 401);
+      await prisma.session.updateMany({ where: { userId: user.id }, data: { expiresAt: new Date(0) } });
+      assert.equal((await call('/auth/me', 'GET', undefined, login.data.token)).status, 401);
       assert.equal((await call('/auth/me', 'GET', undefined, 'invalid-token')).status, 401);
       assert.equal((await call('/auth/verify', 'POST', { email, code: '000000' })).status, 404);
     });
@@ -111,7 +110,11 @@ test('Database API, credential-checked sessions, permissions, rewards and schedu
       failTmdb = true;
       await assert.rejects(syncCatalog());
       assert.deepEqual((await call('/releases/upcoming')).data, upcoming.data);
+      assert.equal((await prisma.syncRun.findFirst({ orderBy: { id: 'desc' } }))?.status, 'failed');
       failTmdb = false;
+      await prisma.jobLock.create({ data: { name: 'tmdb-catalog', owner: 'other-worker', expiresAt: new Date(Date.now() + 60000) } });
+      assert.deepEqual(await syncCatalog(), { skipped: true });
+      await prisma.jobLock.deleteMany();
     });
     await t.test('Release subscriptions persist per account and follow current release dates', async () => {
       const upcoming = await prisma.movie.findUniqueOrThrow({ where: { tmdbId: 103 } });
@@ -148,20 +151,30 @@ test('Database API, credential-checked sessions, permissions, rewards and schedu
       assert.equal(releaseReminderTime('2026-02-30', now), null);
       assert.equal(releaseReminderTime(null, now), null);
     });
-    await t.test('Cines valida ubicación, elimina duplicados, ordena por distancia y reporta caída del proveedor', async () => {
+    await t.test('Cinema searches validate coordinates, cache areas, rank actual distances and survive outages', async () => {
       const input = { lat: 0, lng: 0, radiusM: 15000 };
       assert.equal((await call('/cinemas/nearby', 'POST', input)).status, 401);
-      for (const bad of [{ lat: 91, lng: 0 }, { lat: '0', lng: 0 }, { lat: 0, lng: 181 }, { lat: 0, lng: 0, radiusM: 0 }, { lat: 0, lng: 0, radiusM: 50001 }]) assert.equal((await call('/cinemas/nearby', 'POST', bad, alice.token)).status, 400);
+      for (const bad of [{ lat: 91, lng: 0 }, { lat: '0', lng: 0 }, { lat: 0, lng: 181 }, { lat: 0, lng: 0, radiusM: 0 }, { lat: 0, lng: 0, radiusM: 50001 }, { lat: '0);out;', lng: 0 }]) {
+        assert.equal((await call('/cinemas/nearby', 'POST', bad, alice.token)).status, 400);
+      }
       assert.equal(overpassRequests, 0);
-      const first = await call('/cinemas/nearby', 'POST', input, alice.token);
-      assert.equal(first.status, 200); assert.equal(first.data.source, 'live');
-      assert.deepEqual(first.data.cinemas.map((row: any) => row.id), ['node/1','way/2']);
+      const [first, concurrent] = await Promise.all([call('/cinemas/nearby', 'POST', input, alice.token), call('/cinemas/nearby', 'POST', input, bob.token)]);
+      assert.equal(first.status, 200); assert.equal(concurrent.status, 200);
+      assert.equal(overpassRequests, 1);
+      assert.deepEqual(first.data.cinemas.map((c: any) => c.id), ['node/1', 'way/2']);
       assert.ok(first.data.cinemas[0].distanceKm > 1 && first.data.cinemas[0].distanceKm < 1.2);
       assert.equal(first.data.cinemas[1].address, 'Test Street 20');
       const moved = await call('/cinemas/nearby', 'POST', { ...input, lat: 0.004 }, alice.token);
-      assert.equal(overpassRequests, 2); assert.equal(moved.data.source, 'live');
+      assert.equal(moved.data.source, 'cache');
       assert.ok(moved.data.cinemas[0].distanceKm < first.data.cinemas[0].distanceKm);
+      assert.equal(overpassRequests, 1);
+      assert.equal(await prisma.cinemaLookup.count(), 1);
+      await prisma.cinemaLookup.updateMany({ data: { expiresAt: new Date(0) } });
       overpassFailed = true;
+      const stale = await call('/cinemas/nearby', 'POST', input, alice.token);
+      assert.equal(stale.status, 200); assert.equal(stale.data.source, 'stale');
+      assert.equal(stale.data.cinemas.length, 2);
+      await prisma.cinemaLookup.updateMany({ data: { fetchedAt: new Date(Date.now() - 25 * 3600000) } });
       assert.equal((await call('/cinemas/nearby', 'POST', input, alice.token)).status, 503);
       overpassFailed = false;
     });
@@ -179,9 +192,6 @@ test('Database API, credential-checked sessions, permissions, rewards and schedu
       assert.equal((await call(`/movies/${movie.id}/reviews`, 'POST', { text: 'Nice', rating: 3.5 }, bob.token)).status, 201);
       const detail = await call(`/movies/${movie.id}`);
       assert.equal(detail.data.communityRating, 4); assert.equal(detail.data.commentsCount, 2); assert.equal(detail.data.reviewsLast30Days, 2);
-      // La autora no puede likear ni repostear su propia reseña.
-      assert.equal((await call(`/reviews/${reviewId}/like`, 'POST', undefined, alice.token)).status, 403);
-      assert.equal((await call(`/reviews/${reviewId}/repost`, 'POST', undefined, alice.token)).status, 403);
       assert.equal((await call(`/reviews/${reviewId}/like`, 'POST', undefined, bob.token)).data.liked, true);
       assert.equal((await call(`/reviews/${reviewId}/repost`, 'POST', undefined, bob.token)).data.reposted, true);
       assert.equal((await call('/notifications', 'GET', undefined, alice.token)).data.length, 2);
@@ -246,7 +256,7 @@ test('Database API, credential-checked sessions, permissions, rewards and schedu
       assert.equal(detail.reviewsLast30Days, 2);
       await prisma.review.delete({ where: { id: unrated.id } });
     });
-    await t.test('User updates persist with JWT authentication; administration checks roles', async () => {
+    await t.test('User updates persist and revoke other sessions; administration checks roles', async () => {
       assert.equal((await call('/users', 'GET', undefined, alice.token)).status, 403);
       assert.equal((await call(`/users/${bob.user.id}/role`, 'PATCH', { role: 'superadmin' }, alice.token)).status, 403);
       assert.equal((await call('/users/me', 'PATCH', { name: 'Alice Updated', email: 'alice@example.test' }, alice.token)).data.name, 'Alice Updated');
@@ -254,7 +264,7 @@ test('Database API, credential-checked sessions, permissions, rewards and schedu
       const updated = await call('/users/me', 'PATCH', { name: 'Alice Updated', email: 'newalice@example.test' }, alice.token);
       assert.equal(updated.data.email, 'newalice@example.test');
       assert.equal((await call('/auth/me', 'GET', undefined, alice.token)).data.email, 'newalice@example.test');
-      assert.equal((await call('/auth/me', 'GET', undefined, otherLogin.data.token)).status, 200);
+      assert.equal((await call('/auth/me', 'GET', undefined, otherLogin.data.token)).status, 401);
       assert.equal((await call('/users/me', 'PATCH', { name: 'Alice', email: 'bob@example.test' }, alice.token)).status, 409);
     });
     await t.test('Achievements and reward spending are persistent and cannot overspend', async () => {

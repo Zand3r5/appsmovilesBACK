@@ -1,55 +1,66 @@
+import type { Prisma, PrismaClient, Redemption } from '@prisma/client';
 import { prisma } from '../prisma';
-import { pointsSummary } from './points';
-export { calculateRank } from './ranks';
+import { calculateRank } from './ranks';
+import { initializePoints, recordPoints, pointsSummary, withUserPoints } from './points';
+export { calculateRank };
+type AchievementStat = 'totalReviews' | 'maxLikesOnReview' | 'distinctGenres' | 'totalRatings' | 'totalPhotos';
 
-async function achievementStats(userId: number) {
-  const reviews = await prisma.review.findMany({ where: { authorId: userId }, include: { movie: { include: { genres: true } }, _count: { select: { likes: true } } } });
-  return {
+interface AchievementDef {
+  id: string;
+  title: string;
+  description: string;
+  icon: string;
+  stat: string;
+  goal: number;
+  points: number;
+}
+
+type AchievementsResult = {
+  list: (AchievementDef & { current: number; unlocked: boolean; awardedAt: Date | null })[];
+  totalPoints: number; availablePoints: number; profile: { reviews: number; likes: number };
+};
+export async function getAchievements(userId: number, db: Prisma.TransactionClient | PrismaClient = prisma): Promise<AchievementsResult> {
+  if ('$transaction' in db) return withUserPoints(userId, tx => getAchievements(userId, tx));
+  await initializePoints(db, userId);
+  const reviews = await db.review.findMany({ where: { authorId: userId }, include: { movie: { include: { genres: true } }, _count: { select: { likes: true } } } });
+  const stats: Record<AchievementStat, number> = {
     totalReviews: reviews.length,
-    maxLikesOnReview: Math.max(0, ...reviews.map(row => row._count.likes)),
-    distinctGenres: new Set(reviews.flatMap(row => row.movie.genres.map(genre => genre.id))).size,
-    totalRatings: reviews.filter(row => row.rating !== null).length,
-    totalPhotos: reviews.filter(row => row.photo).length,
-    likes: reviews.reduce((sum, row) => sum + row._count.likes, 0),
+    maxLikesOnReview: Math.max(0, ...reviews.map(r => r._count.likes)),
+    distinctGenres: new Set(reviews.flatMap(r => r.movie.genres.map(g => g.id))).size,
+    totalRatings: reviews.filter(r => r.rating !== null).length,
+    totalPhotos: reviews.filter(r => r.photo).length,
   };
-}
-// Los logros se otorgan al guardar actividad, nunca al consultar una pantalla.
-export async function awardAchievements(userId: number) {
-  const stats: Record<string, number> = await achievementStats(userId);
-  const definitions = await prisma.achievement.findMany({ orderBy: { id: 'asc' } });
+  const definitions = await db.achievement.findMany({ orderBy: { id: 'asc' } });
   for (const achievement of definitions) {
-    if ((stats[achievement.stat] ?? 0) < achievement.goal) continue;
-    const where = { userId_achievementId: { userId, achievementId: achievement.id } };
-    if (await prisma.achievementAward.findUnique({ where })) continue;
-    try {
-      await prisma.$transaction([
-        prisma.achievementAward.create({ data: { userId, achievementId: achievement.id, points: achievement.points } }),
-        prisma.user.update({ where: { id: userId }, data: { points: { increment: achievement.points } } }),
-        prisma.pointEntry.create({ data: { userId, kind: 'achievement', amount: achievement.points, description: achievement.title } }),
-      ]);
-    } catch (error: any) { if (error.code !== 'P2002') throw error; }
+    if ((stats[achievement.stat as AchievementStat] ?? 0) < achievement.goal) continue;
+    const award = await db.achievementAward.upsert({
+      where: { userId_achievementId: { userId, achievementId: achievement.id } },
+      create: { userId, achievementId: achievement.id, points: achievement.points }, update: {},
+    });
+    await recordPoints(db, userId, `achievement:${achievement.id}`, 'achievement', award.points, achievement.title, award.awardedAt);
   }
+  const awards = await db.achievementAward.findMany({ where: { userId } });
+  const list = definitions.map(a => {
+    const award = awards.find(row => row.achievementId === a.id);
+    return { ...a, points: award?.points ?? a.points, current: award ? a.goal : Math.min((stats[a.stat as AchievementStat] ?? 0), a.goal), unlocked: !!award, awardedAt: award?.awardedAt ?? null };
+  });
+  const summary = await pointsSummary(db, userId);
+  return { list, totalPoints: summary.earned, availablePoints: summary.balance, profile: { reviews: reviews.length, likes: reviews.reduce((sum, r) => sum + r._count.likes, 0) } };
 }
-export async function getAchievements(userId: number) {
-  const stats: Record<string, number> = await achievementStats(userId);
-  const definitions = await prisma.achievement.findMany({ orderBy: { id: 'asc' } });
-  const awards = await prisma.achievementAward.findMany({ where: { userId } });
-  const summary = await pointsSummary(userId);
+
+export async function getRewards(userId: number, db: Prisma.TransactionClient | PrismaClient = prisma): Promise<{
+  catalog: Prisma.RewardGetPayload<{}>[]; spentPoints: number; availablePoints: number;
+  redeemed: (Redemption & { title?: string; description?: string; icon?: string; date: Date })[];
+}> {
+  if ('$transaction' in db) return withUserPoints(userId, tx => getRewards(userId, tx));
+  await getAchievements(userId, db);
+  const summary = await pointsSummary(db, userId);
+  const catalog = await db.reward.findMany({ orderBy: { cost: 'asc' } });
+  const rows = await db.redemption.findMany({ where: { userId }, orderBy: { createdAt: 'desc' } });
   return {
-    list: definitions.map(definition => {
-      const award = awards.find(row => row.achievementId === definition.id);
-      return { ...definition, points: award?.points ?? definition.points, current: award ? definition.goal : Math.min(stats[definition.stat] ?? 0, definition.goal), unlocked: !!award, awardedAt: award?.awardedAt ?? null };
-    }),
-    totalPoints: summary.earned, availablePoints: summary.balance,
-    profile: { reviews: stats.totalReviews, likes: stats.likes },
-  };
-}
-export async function getRewards(userId: number) {
-  const catalog = await prisma.reward.findMany({ orderBy: { cost: 'asc' } });
-  const rows = await prisma.redemption.findMany({ where: { userId, status: { not: 'canceled' } }, orderBy: { createdAt: 'desc' } });
-  const summary = await pointsSummary(userId);
-  return {
-    catalog, spentPoints: summary.spent, availablePoints: summary.balance,
-    redeemed: rows.map(row => ({ ...catalog.find(reward => reward.id === row.rewardId), ...row, status: row.status === 'active' && row.expiresAt <= new Date() ? 'expired' : row.status, date: row.createdAt })),
+    catalog,
+    spentPoints: summary.spent,
+    availablePoints: summary.balance,
+    redeemed: rows.filter(r => r.status !== 'canceled').map(r => ({ ...catalog.find(x => x.id === r.rewardId), ...r, status: r.status === 'active' && r.expiresAt <= new Date() ? 'expired' : r.status, date: r.createdAt })),
   };
 }

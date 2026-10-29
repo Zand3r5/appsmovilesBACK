@@ -15,7 +15,11 @@ export function userRoutes(app: Express) {
   app.patch('/api/users/me', requireAuth, async (req, res) => {
     const name = cleanText(req.body?.name, 60), email = cleanEmail(req.body?.email);
     if (!name || !email) fail(400, 'Nombre o email inválido');
-    await prisma.user.update({ where: { id: req.userId }, data: { name: name!, email: email! } });
+    await prisma.$transaction(async tx => {
+      const user = await tx.user.findUniqueOrThrow({ where: { id: req.userId } });
+      await tx.user.update({ where: { id: req.userId }, data: { name: name!, email: email! } });
+      if (email !== user.email) await tx.session.deleteMany({ where: { userId: req.userId, id: { not: req.sessionId } } });
+    });
     res.json(await sessionUser(req.userId!));
   });
   app.get('/api/users', requireAuth, requireRole('superadmin'), async (_req, res) => res.json(await prisma.user.findMany({ select: { ...publicUserSelect, email: true } })));

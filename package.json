@@ -5,14 +5,23 @@
   "main": "index.js",
   "scripts": {
     "dev": "tsx watch src/index.ts",
+    "db:init": "npm run db:setup",
     "db:seed": "tsx prisma/seed.ts",
+    "db:studio": "prisma studio",
     "start": "node dist/index.js",
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
+    "db:migrate": "prisma migrate deploy",
     "catalog:sync": "tsx src/jobs/sync-catalog.ts",
+    "worker": "tsx src/worker.ts",
+    "worker:start": "node dist/worker.js",
     "test": "tsx --test tests/*.test.ts",
     "db:setup": "prisma generate && tsx scripts/setup-db.ts",
-    "admin:create": "tsx scripts/bootstrap-admin.ts"
+    "db:backup": "tsx scripts/backup-db.ts",
+    "media:migrate": "tsx scripts/migrate-images.ts",
+    "admin:create": "tsx scripts/bootstrap-admin.ts",
+    "points:migrate": "tsx scripts/migrate-points.ts",
+    "dev:all": "concurrently --kill-others --names API,WORKER \"npm run dev\" \"npm run worker\""
   },
   "keywords": [],
   "author": "",
@@ -26,7 +35,11 @@
     "express": "^5.3.0",
     "express-rate-limit": "^8.7.1",
     "helmet": "^8.3.0",
-    "jsonwebtoken": "^9.0.3"
+    "jsonwebtoken": "^9.0.3",
+    "node-cron": "^4.6.0",
+    "passkit-generator": "^3.7.0",
+    "sharp": "^0.35.5",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@types/bcrypt": "^6.0.0",
@@ -34,8 +47,10 @@
     "@types/express": "^5.0.6",
     "@types/jsonwebtoken": "^9.0.10",
     "@types/node": "^26.6.5",
+    "fflate": "^0.8.3",
     "prisma": "^6.19.3",
     "tsx": "^4.23.15",
-    "typescript": "^6.0.3"
+    "typescript": "^6.0.3",
+    "concurrently": "^10.0.6"
   }
 }

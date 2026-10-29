@@ -11,7 +11,7 @@ test('Owner cancellation invalidates vouchers and refunds only the verified orig
   process.env.JWT_SECRET = 'cancellation-test-only-secret-123456'; process.env.NODE_ENV = 'test';
   execFileSync(process.execPath, ['node_modules/prisma/build/index.js', 'migrate', 'deploy'], { env: process.env, stdio: 'pipe' });
   const { prisma } = await import('../src/prisma'); const { createApp } = await import('../src/index');
-  const { awardAchievements } = await import('../src/services/gamification');
+  const { getAchievements } = await import('../src/services/gamification');
   const { cancelRedemption } = await import('../src/services/fulfillment');
   const server = createApp().listen(); await new Promise<void>(resolve => server.once('listening', resolve));
   const origin = `http://127.0.0.1:${(server.address() as any).port}/api`;
@@ -29,7 +29,7 @@ test('Owner cancellation invalidates vouchers and refunds only the verified orig
     const account = result.data;
     if (funded) {
       await prisma.review.createMany({ data: movieRows.map(movie => ({ movieId: movie.id, authorId: account.user.id, text: 'Test review', rating: 4 })) });
-      await awardAchievements(account.user.id);
+      await getAchievements(account.user.id);
     }
     return account;
   }
@@ -54,7 +54,7 @@ test('Owner cancellation invalidates vouchers and refunds only the verified orig
       assert.equal(await balance(owner), 45); assert.equal(await balance(other), 0);
       const row = await prisma.redemption.findUniqueOrThrow({ where: { id: voucher.redemptionId } });
       assert.equal(row.status, 'canceled'); assert.equal(row.refundedById, owner.user.id); assert.ok(row.refundedAt);
-      const credits = await prisma.pointEntry.findMany({ where: { userId: owner.user.id, kind: 'refund' } });
+      const credits = await prisma.pointEntry.findMany({ where: { userId: owner.user.id, key: `refund:${row.id}` } });
       assert.equal(credits.length, 1); assert.equal(credits[0].amount, 30);
       const rewards = (await call('/rewards', 'GET', undefined, owner.token)).data;
       assert.equal(rewards.spentPoints, 0); assert.equal(rewards.availablePoints, 45);
@@ -92,15 +92,25 @@ test('Owner cancellation invalidates vouchers and refunds only the verified orig
       assert.equal(await balance(owner), 45);
       assert.equal(await prisma.pointEntry.count({ where: { userId: owner.user.id, kind: 'refund' } }), 1);
     });
-    await t.test('Un canje sin usar puede anularse aunque esté vencido', async () => {
+    await t.test('Unused expired vouchers can be canceled, but missing or inconsistent debits cannot mint points', async () => {
       const owner = await user(), voucher = await buy(owner);
       await prisma.redemption.update({ where: { id: voucher.redemptionId }, data: { expiresAt: new Date(0) } });
-      assert.equal((await call('/rewards/redemptions/' + voucher.redemptionId, 'DELETE', undefined, owner.token)).status, 200);
+      assert.equal((await call(`/rewards/redemptions/${voucher.redemptionId}`, 'DELETE', undefined, owner.token)).status, 200);
       assert.equal(await balance(owner), 45);
+      const next = await buy(owner);
+      const key = { userId_key: { userId: owner.user.id, key: `redemption:${next.redemptionId}` } };
+      await prisma.pointEntry.update({ where: key, data: { amount: -1 } });
+      const prior = await balance(owner);
+      assert.equal((await call(`/rewards/redemptions/${next.redemptionId}`, 'DELETE', undefined, owner.token)).status, 409);
+      assert.equal(await balance(owner), prior);
+      assert.equal((await prisma.redemption.findUniqueOrThrow({ where: { id: next.redemptionId } })).status, 'active');
+      await prisma.pointEntry.delete({ where: key });
+      assert.equal((await call(`/rewards/redemptions/${next.redemptionId}`, 'DELETE', undefined, owner.token)).status, 409);
+      assert.equal(await prisma.pointEntry.count({ where: { userId: owner.user.id, key: `refund:${next.redemptionId}` } }), 0);
     });
     await t.test('A failed credit insert rolls back voucher invalidation and allows a clean retry', async () => {
       const owner = await user(), voucher = await buy(owner);
-      await prisma.$executeRawUnsafe(`CREATE TRIGGER fail_fixture_refund BEFORE INSERT ON "PointEntry" WHEN NEW."userId" = ${owner.user.id} AND NEW."kind" = 'refund' BEGIN SELECT RAISE(ABORT, 'fixture-refund-failure'); END`);
+      await prisma.$executeRawUnsafe(`CREATE TRIGGER fail_fixture_refund BEFORE INSERT ON "PointEntry" WHEN NEW."userId" = ${owner.user.id} AND NEW."key" = 'refund:${voucher.redemptionId}' BEGIN SELECT RAISE(ABORT, 'fixture-refund-failure'); END`);
       try { await assert.rejects(cancelRedemption(voucher.redemptionId, owner.user.id)); }
       finally { await prisma.$executeRawUnsafe('DROP TRIGGER fail_fixture_refund'); }
       const row = await prisma.redemption.findUniqueOrThrow({ where: { id: voucher.redemptionId } });

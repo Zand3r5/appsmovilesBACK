@@ -2,7 +2,7 @@ import type { Express } from 'express';
 import bcrypt from 'bcrypt';
 import rateLimit from 'express-rate-limit';
 import { prisma } from '../prisma';
-import { requireAuth, createToken, sessionUser } from '../middlewares/auth';
+import { requireAuth, createSession, sessionUser } from '../middlewares/auth';
 import { cleanEmail, cleanText, isStrongPassword } from '../utils/validation';
 import { fail } from '../utils/http';
 
@@ -15,17 +15,18 @@ export function authRoutes(app: Express) {
     const exists = await prisma.user.findUnique({ where: { email: email! } });
     if (exists) fail(409, 'Ya existe una cuenta con ese email. Iniciá sesión');
     const user = await prisma.user.create({ data: { name: name!, email: email!, passwordHash: await bcrypt.hash(password, 10) } });
-    res.status(201).json({ token: await createToken(user.id), user: await sessionUser(user.id) });
+    res.status(201).json({ token: await createSession(user.id), user: await sessionUser(user.id) });
   });
   app.post('/api/auth/login', async (req, res) => {
     const email = cleanEmail(req.body?.email), password = req.body?.password;
     if (!email || typeof password !== 'string' || password.length > 72) fail(400, 'Completá email y contraseña');
     const user = await prisma.user.findUnique({ where: { email: email! } });
     if (!user || !await bcrypt.compare(password, user.passwordHash)) fail(401, 'Email o contraseña incorrectos');
-    res.json({ token: await createToken(user.id), user: await sessionUser(user.id) });
+    res.json({ token: await createSession(user.id), user: await sessionUser(user.id) });
   });
   app.get('/api/auth/me', requireAuth, async (req, res) => res.json(await sessionUser(req.userId!)));
   app.post('/api/auth/logout', requireAuth, async (req, res) => {
+    await prisma.session.deleteMany({ where: { id: req.sessionId } });
     res.status(204).end();
   });
 }

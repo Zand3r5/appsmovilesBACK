@@ -4,7 +4,7 @@ import { mkdtemp, writeFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-
+import sharp from 'sharp';
 test('Persistent images, ownership, one-time rewards, refunds and consistent backups', async () => {
   const dir = await mkdtemp(path.join(tmpdir(), 'whatnext-assets-'));
   process.env.DATABASE_URL = `file:${path.join(dir, 'test.db')}`; await writeFile(path.join(dir, 'test.db'), '');
@@ -23,20 +23,20 @@ test('Persistent images, ownership, one-time rewards, refunds and consistent bac
     const alice = await signup('alice@assets.test'), staff = await signup('staff@assets.test'), admin = await signup('admin@assets.test');
     await prisma.user.update({ where: { id: staff.user.id }, data: { role: 'moderator' } });
     await prisma.user.update({ where: { id: admin.user.id }, data: { role: 'superadmin' } });
-    const bytes = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2ZncAAAAASUVORK5CYII=', 'base64');
+    const bytes = await sharp({ create: { width: 10, height: 10, channels: 3, background: '#abcdef' } }).png().toBuffer();
     const image = `data:image/png;base64,${bytes.toString('base64')}`;
     assert.equal((await call('/uploads', 'POST', { image })).status, 401);
     assert.equal((await call('/uploads', 'POST', { image: 'data:image/png;base64,AAAA' }, alice.token)).status, 400);
     const uploaded = await call('/uploads', 'POST', { image }, alice.token);
-    assert.equal(uploaded.status, 201); assert.match(uploaded.data.url, /^\/media\/.*\.png$/);
+    assert.equal(uploaded.status, 201); assert.match(uploaded.data.url, /^\/media\/.*\.webp$/);
     const served = await fetch(origin + uploaded.data.url);
     assert.equal(served.status, 200); assert.equal(served.headers.get('cross-origin-resource-policy'), 'cross-origin');
-    assert.deepEqual(Buffer.from(await served.arrayBuffer()), bytes);
+    assert.equal((await sharp(Buffer.from(await served.arrayBuffer())).metadata()).format, 'webp');
     const movie = await call('/movies', 'POST', { title: 'Uploaded poster', overview: 'A movie', genres: ['Drama'], runtime: 90, releaseDate: '2026-01-01', posterUrl: image }, admin.token);
     assert.equal(movie.status, 201); assert.match(movie.data.posterUrl, /^\/media\//);
     const review = await call(`/movies/${movie.data.id}/reviews`, 'POST', { text: 'Photo review', rating: 4, photo: origin + uploaded.data.url }, alice.token);
     assert.equal(review.status, 201); assert.equal(review.data.photo, uploaded.data.url);
-    assert.equal((await call(`/movies/${movie.data.id}/reviews`, 'POST', { text: 'Shared photo', rating: 4, photo: uploaded.data.url }, staff.token)).status, 201);
+    assert.equal((await call(`/movies/${movie.data.id}/reviews`, 'POST', { text: 'Stolen photo', rating: 4, photo: uploaded.data.url }, staff.token)).status, 403);
     assert.ok(!(await prisma.review.findFirstOrThrow()).photo?.startsWith('data:'));
     for (let i = 0; i < 4; i++) {
       const extra = await prisma.movie.create({ data: { title: `Extra ${i}`, overview: '' } });
@@ -61,6 +61,11 @@ test('Persistent images, ownership, one-time rewards, refunds and consistent bac
     assert.equal((await call(`/admin/redemptions/${expired.id}/refund`, 'POST', {}, admin.token)).status, 200);
     assert.equal((await call(`/admin/redemptions/${expired.id}/refund`, 'POST', {}, admin.token)).status, 409);
     assert.equal((await call('/rewards', 'GET', undefined, alice.token)).data.spentPoints, 30);
+    const { backupDatabase } = await import('../scripts/backup-db');
+    const backup = await backupDatabase();
+    assert.ok((await stat(path.join(backup, 'whatnext.db'))).size > 0);
+    const filename = uploaded.data.url.split('/').pop();
+    assert.ok((await stat(path.join(backup, 'uploads', filename))).size > 0);
   } finally {
     await new Promise<void>(resolve => server.close(() => resolve())); await prisma.$disconnect(); await rm(dir, { recursive: true, force: true });
   }

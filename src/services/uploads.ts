@@ -1,33 +1,39 @@
-// Guardamos el archivo con un nombre propio para evitar sobrescribir imágenes existentes.
 import { randomUUID } from 'node:crypto';
-import { mkdir, writeFile, access } from 'node:fs/promises';
+import { mkdir, writeFile, unlink } from 'node:fs/promises';
 import path from 'node:path';
+import sharp from 'sharp';
+import { prisma } from '../prisma';
 import { fail } from '../utils/http';
 export const uploadDirectory = () => path.resolve(process.env.UPLOAD_DIR ?? path.resolve(__dirname, '../../uploads'));
-const managedPath = /^\/media\/([0-9a-f-]{36}\.(?:jpg|png|webp))$/;
-export async function storeImage(_ownerId: number, image: unknown) {
+const managedPath = /^\/media\/([0-9a-f-]{36}\.webp)$/;
+export async function storeImage(ownerId: number, image: unknown) {
   if (typeof image !== 'string' || image.length > 2000000) fail(400, 'Imagen inválida o demasiado grande');
-  // La app siempre manda "data:image/jpeg", aunque la foto sea PNG o WebP: el tipo real se saca de los primeros bytes.
-  const match = /^data:image\/[a-z+.-]+;base64,([A-Za-z0-9+/]+={0,2})$/i.exec(image);
-  if (!match) fail(400, 'Subí una imagen JPEG, PNG o WebP');
-  const buffer = Buffer.from(match[1], 'base64');
-  const png = buffer.subarray(0, 8).equals(Buffer.from([137,80,78,71,13,10,26,10]));
-  const jpeg = buffer.length > 3 && buffer[0] === 255 && buffer[1] === 216 && buffer[2] === 255;
-  const webp = buffer.length > 12 && buffer.subarray(0, 4).toString() === 'RIFF' && buffer.subarray(8, 12).toString() === 'WEBP';
-  if (!png && !jpeg && !webp) fail(400, 'No se pudo leer la imagen');
-  const filename = randomUUID() + (png ? '.png' : webp ? '.webp' : '.jpg');
+  const match = /^data:image\/(?:jpeg|jpg|png|webp);base64,([A-Za-z0-9+/]+={0,2})$/.exec(image);
+  if (!match) fail(400, 'Subí una imagen JPEG o PNG');
+  let buffer: Buffer;
+  try {
+    const original = Buffer.from(match[1], 'base64');
+    const reader = sharp(original, { limitInputPixels: 20000000 });
+    const info = await reader.metadata();
+    if (!['jpeg', 'png', 'webp'].includes(info.format ?? '')) fail(400, 'Formato de imagen inválido');
+    buffer = await reader.rotate().resize(1600, 1600, { fit: 'inside', withoutEnlargement: true }).webp({ quality: 80 }).toBuffer();
+  } catch { fail(400, 'No se pudo leer la imagen'); }
+  const id = randomUUID(), filename = `${id}.webp`;
   await mkdir(uploadDirectory(), { recursive: true });
-  await writeFile(path.join(uploadDirectory(), filename), buffer, { flag: 'wx' });
-  return '/media/' + filename;
+  await writeFile(path.join(uploadDirectory(), filename), buffer, { flag: 'wx', mode: 0o644 });
+  try { await prisma.upload.create({ data: { id, ownerId, filename, mime: 'image/webp', size: buffer.length } }); }
+  catch (error) { await unlink(path.join(uploadDirectory(), filename)).catch(() => {}); throw error; }
+  return `/media/${filename}`;
 }
 export async function imageReference(value: string | null | undefined, ownerId: number, allowExternal = false) {
   if (!value) return value;
   if (value.startsWith('data:')) return storeImage(ownerId, value);
   let pathname = value;
-  try { pathname = new URL(value).pathname; } catch {}
+  try { pathname = new URL(value).pathname; } catch { /* relative asset */ }
   const match = managedPath.exec(pathname);
   if (match) {
-    try { await access(path.join(uploadDirectory(), match[1])); } catch { fail(400, 'La imagen no existe'); }
+    const file = await prisma.upload.findUnique({ where: { filename: match[1] } });
+    if (!file || (!allowExternal && file.ownerId !== ownerId)) fail(403, 'La imagen no pertenece a tu cuenta');
     return pathname;
   }
   if (allowExternal && /^https?:\/\//.test(value)) return value;

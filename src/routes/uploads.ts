@@ -1,10 +1,10 @@
 import type { Express } from 'express';
 import express from 'express';
-
+import rateLimit from 'express-rate-limit';
 import { requireAuth } from '../middlewares/auth';
 import { storeImage, uploadDirectory } from '../services/uploads';
 export function uploadRoutes(app: Express) {
-  app.post('/api/uploads', requireAuth, async (req, res) => {
+  app.post('/api/uploads', requireAuth, rateLimit({ windowMs: 60000, limit: 20, message: { error: 'Esperá un momento antes de subir más fotos' } }), async (req, res) => {
     res.status(201).json({ url: await storeImage(req.userId!, req.body?.image) });
   });
   app.use('/media', (req, res, next) => {

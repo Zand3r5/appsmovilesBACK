@@ -1,0 +1,212 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  points Int @default(0)
+  id           Int      @id @default(autoincrement())
+  name         String
+  email        String   @unique
+  passwordHash String
+  role         String   @default("user")
+  createdAt    DateTime @default(now())
+  releaseReminders ReleaseReminder[]
+
+  reviews       Review[]
+  likes         Like[]
+  reposts       Repost[]
+  sentRequests  Friendship[]   @relation("requester")
+  recvRequests  Friendship[]   @relation("addressee")
+  notifications Notification[] @relation("recipient")
+  actions       Notification[] @relation("actor")
+  redemptions   Redemption[]
+  achievementAwards AchievementAward[]
+  pointEntries PointEntry[]
+}
+
+model Movie {
+  id           Int      @id @default(autoincrement())
+  tmdbId       Int?     @unique
+  title        String
+  overview     String
+  releaseDate  String?
+  runtime      Int?
+  posterPath   String?
+  backdropPath String?
+  metadata     String   @default("{}")
+  featured     Boolean  @default(false)
+  hidden       Boolean  @default(false)
+  syncedAt     DateTime @default(now())
+
+  catalogEntries CatalogEntry[]
+  releaseReminders ReleaseReminder[]
+  genres  Genre[]
+  reviews Review[]
+}
+
+model Genre {
+  id     Int     @id
+  name   String
+  movies Movie[]
+}
+
+model Review {
+  id        Int       @id @default(autoincrement())
+  text      String
+  rating    Float?
+  photo     String?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime? @updatedAt
+
+  author        User           @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  authorId      Int
+  movie         Movie          @relation(fields: [movieId], references: [id], onDelete: Cascade)
+  movieId       Int
+  likes         Like[]
+  reposts       Repost[]
+  notifications Notification[]
+
+  @@unique([authorId, movieId])
+  @@index([movieId, createdAt])
+  @@index([authorId, createdAt])
+}
+
+model Like {
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId    Int
+  review    Review   @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+  reviewId  Int
+  createdAt DateTime @default(now())
+
+  @@id([userId, reviewId])
+}
+
+model Repost {
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId    Int
+  review    Review   @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+  reviewId  Int
+  createdAt DateTime @default(now())
+
+  @@id([userId, reviewId])
+  @@index([userId, createdAt])
+}
+
+model Friendship {
+  id          Int      @id @default(autoincrement())
+  requester   User     @relation("requester", fields: [requesterId], references: [id], onDelete: Cascade)
+  requesterId Int
+  addressee   User     @relation("addressee", fields: [addresseeId], references: [id], onDelete: Cascade)
+  addresseeId Int
+  userLowId   Int
+  userHighId  Int
+  status      String   @default("pending")
+  createdAt   DateTime @default(now())
+
+  @@unique([userLowId, userHighId])
+}
+
+model Notification {
+  id           Int      @id @default(autoincrement())
+  recipient    User     @relation("recipient", fields: [recipientId], references: [id], onDelete: Cascade)
+  recipientId  Int
+  actor        User     @relation("actor", fields: [actorId], references: [id], onDelete: Cascade)
+  actorId      Int
+  type         String
+  review       Review?  @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+  reviewId     Int?
+  friendshipId Int?
+  read         Boolean  @default(false)
+  createdAt    DateTime @default(now())
+
+  @@index([recipientId, read])
+}
+
+model Redemption {
+  id         Int       @id @default(autoincrement())
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId     Int
+  reward Reward @relation(fields: [rewardId], references: [id])
+  rewardId   String
+  cost       Int
+  code       String    @unique
+  status     String    @default("active")
+  createdAt  DateTime  @default(now())
+  expiresAt  DateTime
+  usedAt     DateTime?
+  usedById Int?
+  refundedById Int?
+  refundedAt DateTime?
+
+  @@index([userId, status])
+}
+model CatalogEntry {
+  kind String
+  movieId Int
+  movie Movie @relation(fields: [movieId], references: [id], onDelete: Cascade)
+  position Int
+  tmdbRating Float?
+  @@id([kind, movieId])
+  @@index([kind, position])
+}
+
+model ReleaseReminder {
+  userId Int
+  movieId Int
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  movie Movie @relation(fields: [movieId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  @@id([userId, movieId])
+  @@index([movieId])
+}
+
+model AchievementAward {
+  id Int @id @default(autoincrement())
+  userId Int
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  achievement Achievement @relation(fields: [achievementId], references: [id])
+  achievementId String
+  points Int
+  awardedAt DateTime @default(now())
+  @@unique([userId, achievementId])
+}
+
+model PointEntry {
+  id Int @id @default(autoincrement())
+  userId Int
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  kind String
+  amount Int
+  description String
+  createdAt DateTime @default(now())
+  @@index([userId, id])
+}
+
+model Reward {
+ id String @id
+ title String
+ description String
+ icon String
+ cost Int
+ redemptions Redemption[]
+}
+model Achievement {
+ id String @id
+ title String
+ description String
+ icon String
+ stat String
+ goal Int
+ points Int
+ awards AchievementAward[]
+}
+model Rank {
+ min Int @id
+ name String
+ icon String
+}
