@@ -16,7 +16,7 @@ docker compose ps
 docker compose logs --tail=100 api worker
 ```
 
-The migration service runs before the API and worker. The worker refreshes TMDB daily at 04:00 Buenos Aires time and checks release pushes every minute. Keep it running even if you move TMDB synchronization to an external scheduler. Configure uptime monitoring for `/api/health` and worker container health. A heartbeat proves the worker process is alive; monitor failed deliveries and catalog freshness separately.
+The migration service runs before the API and worker. The worker refreshes TMDB daily at 04:00 Buenos Aires time and checks release and social pushes every minute. Keep it running even if you move TMDB synchronization to an external scheduler. Configure uptime monitoring for `/api/health` and worker container health. A heartbeat proves the worker process is alive; monitor failed deliveries and catalog freshness separately.
 
 For a fresh database, create the first administrator interactively without putting a password in command history:
 
@@ -51,7 +51,7 @@ Follow the official [Expo push setup](https://docs.expo.dev/push-notifications/p
 5. In an isolated staging database, set a test movie's release to today's Buenos Aires date. Subscribe before 10:00 and verify arrival after 10:00 with the app closed. Confirm a tap opens the movie, verify the saved ticket and receipt, and confirm subsequent worker ticks do not enqueue another delivery. Use staging rather than changing production catalog dates for tests.
 6. Check permission denial, logout, account switching, cancellation, expired sessions and an invalid token. Logout revokes that installation's session/device registration; it preserves subscriptions for future sessions. Alerts can be delayed or suppressed by the operating system, and an already accepted push cannot be recalled.
 
-Tickets and receipts are persisted in `PushDelivery`. Receipt success means handoff to the platform provider, not display on a phone. Temporary failures retry with backoff; invalid tokens are disabled. Queue creation is unique per account/device/movie/date. Delivery is at least once: a worker crash after remote acceptance can produce a duplicate. Notifications currently cover release reminders; social activity remains an in-app feed.
+Tickets and receipts are persisted in `PushDelivery`. Receipt success means handoff to the platform provider, not display on a phone. Temporary failures retry with backoff; invalid tokens are disabled. Queue creation is unique per account/device/movie/date. Delivery is at least once: a worker crash after remote acceptance can produce a duplicate. Notifications cover release reminders, incoming friend requests, review likes and review reposts.
 
 ## Checks still requiring a real environment
 

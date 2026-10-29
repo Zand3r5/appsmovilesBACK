@@ -1,3 +1,4 @@
+import { createSocialNotification } from '../services/push';
 import type { Express } from 'express';
 import { prisma } from '../prisma';
 import { publicUserSelect, requireAuth } from '../middlewares/auth';
@@ -16,7 +17,7 @@ export function socialRoutes(app: Express) {
     if (!await prisma.user.findUnique({ where: { id: toId! } })) fail(404, 'Usuario no encontrado');
     const request = await prisma.$transaction(async tx => {
       const f = await tx.friendship.create({ data: { requesterId: me, addresseeId: toId!, userLowId: Math.min(me, toId!), userHighId: Math.max(me, toId!) } });
-      await tx.notification.create({ data: { type: 'friend_request', recipientId: toId!, actorId: me, friendshipId: f.id } });
+      await createSocialNotification(tx, { type: 'friend_request', recipientId: toId!, actorId: me, friendshipId: f.id });
       return f;
     });
     res.status(201).json(request);

@@ -116,6 +116,7 @@ model Friendship {
 }
 
 model Notification {
+  pushDeliveries PushDelivery[]
   id           Int      @id @default(autoincrement())
   recipient    User     @relation("recipient", fields: [recipientId], references: [id], onDelete: Cascade)
   recipientId  Int
@@ -221,11 +222,14 @@ model PushDelivery {
   id String @id
   userId Int
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-  movieId Int
-  movie Movie @relation(fields: [movieId], references: [id], onDelete: Cascade)
+  movieId Int?
+  movie Movie? @relation(fields: [movieId], references: [id], onDelete: Cascade)
+  kind String @default("release-reminder")
+  notificationId Int?
+  notification Notification? @relation(fields: [notificationId], references: [id], onDelete: SetNull)
   deviceId String?
   device PushDevice? @relation(fields: [deviceId], references: [id], onDelete: SetNull)
-  releaseDate String
+  releaseDate String?
   status String @default("pending")
   attempts Int @default(0)
   nextAttemptAt DateTime @default(now())

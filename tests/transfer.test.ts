@@ -22,7 +22,7 @@ test('Upgrade preserves existing accounts, balances, vouchers, reference definit
   await mkdir(path.join(oldProject, 'prisma/migrations'), { recursive: true });
   await cp('tests/fixtures/simple-schema.prisma', path.join(oldProject, 'prisma/schema.prisma'));
   for (const entry of await readdir('prisma/migrations')) {
-    if (entry === '202610290001_restore_complete_backend' || (bundled && ['202610280002_reference_catalog', '202610280003_simple_backend'].includes(entry))) continue;
+    if ((entry !== 'migration_lock.toml' && entry > '202610280003_simple_backend') || (bundled && ['202610280002_reference_catalog', '202610280003_simple_backend'].includes(entry))) continue;
     await cp(path.join('prisma/migrations', entry), path.join(oldProject, 'prisma/migrations', entry), { recursive: true });
   }
   const run = (args: string[], cwd = root) => execFileSync(process.execPath, [cli, ...args], { cwd, env: process.env, stdio: 'pipe' });

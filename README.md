@@ -41,7 +41,7 @@ For local testing on the same computer/network, the frontend's automatic Expo-ho
 | `src/routes/` | HTTP endpoints, request validation and permissions |
 | `src/middlewares/` | Revocable session checks, roles, error handling |
 | `src/services/` | Movie queries, calculations, points, vouchers, push, uploads, Wallet and external providers |
-| `src/worker.ts` | Daily TMDB schedule and minute-by-minute release push processing |
+| `src/worker.ts` | Daily TMDB schedule and minute-by-minute release and social push processing |
 | `src/jobs/sync-catalog.ts` | One-time catalog import command |
 | `prisma/schema.prisma` | Database models and relationships |
 | `prisma/migrations/` | Versioned SQL upgrades; existing history is retained |
@@ -70,7 +70,7 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for startup, request flow, calculations, 
 
 The worker reads `TMDB_CRON` at startup. Default: `0 4 * * *`, daily at 04:00 in `America/Argentina/Buenos_Aires`. Change `.env` and restart the worker to change the time. Run `npm run catalog:sync` whenever an immediate update is needed. Movie creation/update happens in `importMovieFromTmdb()` in `src/services/tmdb.ts`, using `movie.upsert` by TMDB ID.
 
-The worker also checks release push deliveries every minute. API and worker must remain running on an awake host. Push requires a physical device, a development/production app build and Expo/EAS platform credentials. Expo Go cannot test this remote delivery implementation. Wallet requires Apple/Google issuer credentials. Adding credentials is still required; moving the code does not create accounts or enable delivery automatically.
+The worker also checks release and social push deliveries every minute. API and worker must remain running on an awake host. Push requires a physical device, a development/production app build and Expo/EAS platform credentials. Expo Go cannot test this remote delivery implementation. Wallet requires Apple/Google issuer credentials. Adding credentials is still required; moving the code does not create accounts or enable delivery automatically.
 
 Saved Wallet passes do not automatically change appearance after use/cancellation/refund; online code validation is authoritative. Delivery receipts indicate provider acceptance rather than proof that a person saw a notification.
 
@@ -99,3 +99,13 @@ Saved Wallet passes do not automatically change appearance after use/cancellatio
 See [deploy/README.md](deploy/README.md) and [deploy/WALLET.md](deploy/WALLET.md). SQLite and uploaded files must be persistent and backed up separately from Git. Keep API and worker on the same host/shared storage. Do not run the seed from the older frontend repository: its demo seed is a different operation.
 
 The root `test-*.sh` scripts are historical manual probes, with demo-account assumptions. Use `npm test` for the maintained regression suite.
+
+## Social push delivery
+
+Friend requests, review likes and review reposts now use the same backend-owned queue, worker, Expo transport, retries and receipts as release reminders. The API creates `Notification` and `PushDelivery` in the same transaction as the social action; it never waits on Expo to complete the request. Payloads and recipients are selected by the server. `PushDelivery.kind` distinguishes `release-reminder` and `social-notification`; existing release rows migrate without losing their state.
+
+The minute worker sends pending social events without waiting for 10:00. Read notifications, withdrawn/answered requests, removed reactions, deleted reviews, hidden movies, logout/expired sessions and switched accounts are rechecked before sending. Notifications already accepted by a provider cannot be recalled. Social messages expire after 24 hours, only target devices registered at event time, and repeated actor/action/subject/device combinations are limited to one per Buenos Aires calendar day. No historical social notifications are backfilled by the migration.
+
+Android uses the `actividad` channel for social notifications and `estrenos` for releases. Notification taps open the requester profile or the reviewed movie. The frontend still requests permission, obtains the Expo token and handles taps; it does not schedule or send social pushes.
+
+Apply the migration with `npm run db:setup` with the API/worker stopped, then restart them. Real delivery still requires the EAS app identifiers, APNs/FCM credentials and an installed development/production build.

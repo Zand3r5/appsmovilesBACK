@@ -187,7 +187,7 @@ A reminder, device registration and delivery record are different things:
 ### Scheduling and sending
 
 1. `worker.ts` checks releases every minute and also once at worker startup.
-2. `runPushDelivery()` acquires the release-push job lease. From 10:00 Buenos Aires onward it finds visible movies releasing today, subscriptions created by the due time, and enabled devices with unexpired sessions.
+2. `runPushDelivery()` acquires the notification-push job lease. From 10:00 Buenos Aires onward it finds visible movies releasing today, subscriptions created by the due time, and enabled devices with unexpired sessions.
 3. A deterministic hash of account/device/movie/date identifies the queued delivery. Upsert avoids creating another delivery record for the same combination.
 4. The worker claims due work, increments attempts, then rechecks the subscription, movie date/visibility, device/account and session. Invalid work is canceled.
 5. `expo('send', ...)` posts the title, body, token and movie ID to Expo Push Service.
@@ -206,7 +206,7 @@ Queue creation is idempotent, not exactly-once transport: a crash after remote a
 
 Current device registrations are session-bound. Logout deletes the session and cascades its device registration. Sessions currently expire after seven days; after expiration, this implementation stops sending through that registration until a fresh valid registration exists. That is our current application policy, not a requirement imposed by push technology.
 
-The worker handles release-day reminders, not all social in-app notifications. It does not replay a missed prior day's release after being offline. Social notifications are saved rows read by `/api/notifications`.
+The worker handles release reminders plus incoming friend requests, review likes and reposts. Social actions create their in-app notification and push outbox in one transaction. The worker sends to devices registered when the action happened, skips read/withdrawn/deleted events, and expires social messages after 24 hours. A stable actor/action/subject/device/day key limits repeated toggles to one push per day. It does not replay a missed prior day's release after being offline. In-app rows are still read through `/api/notifications`.
 
 The earlier Expo Go demonstration was a local alert scheduled by the phone. Remote push requires a development build and real project/platform credentials. See [Expo's distinction between local and remote notifications](https://docs.expo.dev/push-notifications/what-you-need-to-know/). The implementation and fixture tests exist; real-device delivery has not yet been verified with this project's credentials.
 

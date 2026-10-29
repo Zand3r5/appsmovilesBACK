@@ -20,7 +20,7 @@ const heartbeatPath = process.env.WORKER_HEARTBEAT ?? path.join(path.dirname(pro
 const heartbeat = () => writeFile(heartbeatPath, new Date().toISOString()).catch(() => console.error('No se pudo actualizar heartbeat'));
 void heartbeat();
 const heartbeatTimer = setInterval(() => { void heartbeat(); }, 30000);
-console.log(`Worker TMDB activo (${expression}, America/Argentina/Buenos_Aires)`);
+console.log(`Worker TMDB y notificaciones activo (${expression}, America/Argentina/Buenos_Aires)`);
 for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, async () => {
   clearInterval(heartbeatTimer);
   await task.stop();
