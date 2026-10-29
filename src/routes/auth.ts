@@ -5,10 +5,17 @@ import { prisma } from '../prisma';
 import { requireAuth, createSession, sessionUser } from '../middlewares/auth';
 import { cleanEmail, cleanText, isStrongPassword } from '../utils/validation';
 import { fail } from '../utils/http';
+import { changePassword } from '../services/password';
 
 export function authRoutes(app: Express) {
   app.use('/api/auth', rateLimit({ windowMs: 15 * 60000, limit: 40, standardHeaders: 'draft-8', legacyHeaders: false,
     message: { error: 'Demasiados intentos. Volvé a intentar en unos minutos' } }));
+  const passwordLimit = rateLimit({ windowMs: 15 * 60000, limit: 5,
+    keyGenerator: req => String(req.userId),
+    message: { error: 'Demasiados intentos. Esperá unos minutos antes de volver a intentar' } });
+  app.post('/api/auth/change-password', requireAuth, passwordLimit, async (req, res) => {
+    res.json(await changePassword(req.userId!, req.sessionId!, req.body?.currentPassword, req.body?.newPassword));
+  });
   app.post('/api/auth/register', async (req, res) => {
     const name = cleanText(req.body?.name, 60), email = cleanEmail(req.body?.email), password = req.body?.password;
     if (!name || !email || !isStrongPassword(password)) fail(400, 'Ingresá un nombre, email y contraseña de 8 a 72 caracteres con letras y números');
