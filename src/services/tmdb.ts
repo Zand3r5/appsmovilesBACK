@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { prisma } from '../prisma';
 const BASE = 'https://api.themoviedb.org/3';
 const CREW_JOBS = ['Screenplay', 'Director of Photography', 'Original Music Composer', 'Editor', 'Producer'];
+const FESTIVAL = /fest|bafici|ficuba|mar del plata/i;
 async function tmdb(path: string): Promise<any> {
   if (!process.env.TMDB_KEY) throw new Error('Falta TMDB_KEY en backend/.env');
   const url = new URL(`${process.env.TMDB_BASE_URL ?? BASE}${path}`);
@@ -29,8 +30,13 @@ const names = (list: any[] = []) => list.map(p => p.provider_name);
 export async function importMovieFromTmdb(tmdbId: number) {
   const m = await tmdb(`/movie/${tmdbId}?append_to_response=credits,videos,watch/providers,release_dates`);
   const ar = m['watch/providers']?.results?.AR ?? {};
-  const localRelease = m.release_dates?.results?.find((r: any) => r.iso_3166_1 === 'AR')?.release_dates
-    ?.filter((r: any) => [2, 3].includes(r.type)).sort((a: any, b: any) => a.release_date.localeCompare(b.release_date))[0]?.release_date?.slice(0, 10);
+  const arReleases = m.release_dates?.results?.find((r: any) => r.iso_3166_1 === 'AR')?.release_dates ?? [];
+  const localRelease = arReleases
+    .filter((r: any) => [2, 3].includes(r.type)).sort((a: any, b: any) => a.release_date.localeCompare(b.release_date))[0]?.release_date?.slice(0, 10);
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Argentina/Buenos_Aires', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+  const lastCinemaRelease: string | null = arReleases
+    .filter((r: any) => [2, 3].includes(r.type) && !FESTIVAL.test(r.note ?? ''))
+    .map((r: any) => String(r.release_date).slice(0, 10)).filter((d: string) => d <= today).sort().pop() ?? null;
   const metadata = JSON.stringify({
     actors: (m.credits?.cast ?? []).slice(0, 8).map((c: any) => ({ name: c.name, character: c.character })),
     directors: (m.credits?.crew ?? []).filter((c: any) => c.job === 'Director').map((c: any) => c.name),
@@ -41,8 +47,9 @@ export async function importMovieFromTmdb(tmdbId: number) {
   const data = { title: m.title, overview: m.overview || '', releaseDate: localRelease || m.release_date || null,
     runtime: m.runtime || null, posterPath: m.poster_path, backdropPath: m.backdrop_path, metadata, syncedAt: new Date() };
   const genres = m.genres.map((g: any) => ({ where: { id: g.id }, create: { id: g.id, name: g.name } }));
-  return prisma.movie.upsert({ where: { tmdbId: m.id }, create: { tmdbId: m.id, ...data, genres: { connectOrCreate: genres } },
+  const movie = await prisma.movie.upsert({ where: { tmdbId: m.id }, create: { tmdbId: m.id, ...data, genres: { connectOrCreate: genres } },
     update: { ...data, genres: { set: [], connectOrCreate: genres } }, include: { genres: true } });
+  return Object.assign(movie, { lastCinemaRelease });
 }
 async function loadList(path: string) {
   const first = await tmdb(`${path}${path.includes('?') ? '&' : '?'}page=1`);
@@ -71,6 +78,7 @@ export async function syncCatalog(report: (message: string) => void = () => {}) 
   try {
     const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Argentina/Buenos_Aires', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
     const future = new Date(Date.now() + 120 * 86400000).toISOString().slice(0, 10);
+    const monthAgo = new Date(Date.parse(`${today}T00:00:00Z`) - 30 * 86400000).toISOString().slice(0, 10);
     const load = async (label: string, path: string) => {
       report(`Cargando lista: ${label}…`);
       const rows = await loadList(path);
@@ -79,7 +87,10 @@ export async function syncCatalog(report: (message: string) => void = () => {}) 
     };
     const lists: Record<string, any[]> = {
       popular: await load('Populares', '/movie/popular'),
-      now_playing: await load('Cartelera', '/movie/now_playing'),
+      now_playing: [...new Map([
+        ...await load('Cartelera', '/movie/now_playing'),
+        ...await load('Estrenos del último mes', `/discover/movie?with_release_type=2|3&release_date.gte=${monthAgo}&release_date.lte=${today}&sort_by=popularity.desc`),
+      ].map(m => [m.id, m])).values()],
       upcoming: await load('Próximas', `/discover/movie?with_release_type=2|3&release_date.gte=${today}&release_date.lte=${future}&sort_by=primary_release_date.asc`),
     };
     const ids = new Set<number>(Object.values(lists).flatMap(rows => rows.map(m => m.id)));
@@ -88,12 +99,17 @@ export async function syncCatalog(report: (message: string) => void = () => {}) 
     for (const m of saved) ids.add(m.tmdbId!);
     report(`Actualizando detalles de ${ids.size} películas. Esto puede tardar unos minutos…`);
     const mapping = new Map<number, number>();
+    const cinemaRelease = new Map<number, string | null>();
     for (const id of ids) {
       if (lockLost) throw new Error('Se perdió el bloqueo de sincronización');
       const movie = await importMovieFromTmdb(id);
-      mapping.set(id, movie.id); imported++;
+      mapping.set(id, movie.id); cinemaRelease.set(id, movie.lastCinemaRelease); imported++;
       if (imported % 10 === 0 || imported === ids.size) report(`Películas actualizadas: ${imported}/${ids.size}`);
     }
+    lists.now_playing = lists.now_playing
+      .filter(m => (cinemaRelease.get(m.id) ?? '') >= monthAgo)
+      .sort((a, b) => cinemaRelease.get(b.id)!.localeCompare(cinemaRelease.get(a.id)!));
+    report(`Cartelera: ${lists.now_playing.length} películas en cines de Argentina en el último mes.`);
     report('Guardando las listas actualizadas…');
     await prisma.$transaction(async tx => {
       const lock = await tx.jobLock.findFirst({ where: { name, owner, expiresAt: { gt: new Date() } } });

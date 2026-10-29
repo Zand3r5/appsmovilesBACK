@@ -1,12 +1,12 @@
 import { prisma } from '../prisma';
 import { publicUserSelect } from '../middlewares/auth';
 export const reviewInclude = {
-  author: { select: publicUserSelect }, movie: { include: { genres: true } },
+  author: { select: { ...publicUserSelect, _count: { select: { reviews: { where: { movie: { hidden: false } } } } } } }, movie: { include: { genres: true } },
   likes: { select: { userId: true } }, reposts: { select: { userId: true } },
 } as const;
 export function reviewDTO(r: any, userId?: number) {
   return { id: r.id, text: r.text, rating: r.rating, photo: r.photo, createdAt: r.createdAt, updatedAt: r.updatedAt,
-    author: r.author, likes: r.likes.length, reposts: r.reposts.length,
+    author: { id: r.author.id, name: r.author.name, role: r.author.role, reviewCount: r.author._count?.reviews ?? 0 }, likes: r.likes.length, reposts: r.reposts.length,
     liked: r.likes.some((x: any) => x.userId === userId), reposted: r.reposts.some((x: any) => x.userId === userId),
     movie: { id: r.movie.id, title: r.movie.title, releaseDate: r.movie.releaseDate,
       genres: r.movie.genres.map((g: any) => g.name),

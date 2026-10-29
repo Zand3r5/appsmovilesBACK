@@ -15,7 +15,6 @@
     "catalog:sync": "tsx src/jobs/sync-catalog.ts",
     "worker": "tsx src/worker.ts",
     "worker:start": "node dist/worker.js",
-    "test": "tsx --test tests/*.test.ts",
     "db:setup": "prisma generate && tsx scripts/setup-db.ts",
     "db:backup": "tsx scripts/backup-db.ts",
     "media:migrate": "tsx scripts/migrate-images.ts",
@@ -49,7 +48,6 @@
     "@types/jsonwebtoken": "^9.0.10",
     "@types/node": "^26.6.5",
     "concurrently": "^10.0.6",
-    "fflate": "^0.8.3",
     "prisma": "^6.19.3",
     "tsx": "^4.23.15",
     "typescript": "^6.0.3"
