@@ -24,6 +24,10 @@ export async function createSocialNotification(tx: Prisma.TransactionClient, dat
     const id = digest(`social:${data.recipientId}:${device.id}:${data.type}:${data.actorId}:${data.reviewId ?? 'friendship'}:${localDate(now)}`);
     await tx.pushDelivery.upsert({ where: { id }, create: { id, userId: data.recipientId, deviceId: device.id,
       kind: 'social-notification', notificationId: notification.id, nextAttemptAt: now }, update: {} });
+    // Refresh only unclaimed work. A ticket or an in-flight send must retain its
+    // once-per-day identity even if the original notification was removed.
+    await tx.pushDelivery.updateMany({ where: { id, ticketId: null, status: { in: ['pending', 'canceled'] } },
+      data: { notificationId: notification.id, status: 'pending', nextAttemptAt: now } });
   }
   return notification;
 }

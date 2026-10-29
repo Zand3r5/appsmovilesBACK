@@ -21,7 +21,7 @@ npm run catalog:sync
 npm run dev:all
 ```
 
-`db:setup` applies migrations and initializes missing reference definitions. It preserves existing accounts, reviews and customized reward definitions. `db:seed` only initializes missing rewards, achievements and ranks; it is non-destructive. `catalog:sync` imports real movies and saved release lists from TMDB.
+`db:setup` backs up existing SQLite data and uploads, applies migrations, initializes missing reference definitions and restores owned image references. It preserves existing accounts, reviews and customized reward definitions. Run it with API and worker stopped. `db:seed` only initializes missing rewards, achievements and ranks; it is non-destructive. `catalog:sync` imports real movies and saved release lists from TMDB.
 
 `dev:all` keeps the API and worker running. Alternatively, run `npm run dev` and `npm run worker` in separate terminals. Start Expo separately from the frontend repository:
 
@@ -31,7 +31,7 @@ npx expo start --go
 
 For local testing on the same computer/network, the frontend's automatic Expo-host detection still reaches port 3000. For another host, set its `EXPO_PUBLIC_API_URL=http://SERVER_IP:3000/api`. The phone must reach that address. Restart Expo after changing frontend environment settings. Expo's tunnel does not expose the backend.
 
-**Upgrading or moving an existing database:** follow [TRANSFER.md](TRANSFER.md) first. Do not replace an existing database with a seed or run both backends against it during migration.
+**Upgrading an existing database:** use `npm run db:setup` to back up and apply the versioned migrations. Do not replace an existing database with a seed or run both backends against it during migration.
 
 ## Structure
 
@@ -98,7 +98,7 @@ Saved Wallet passes do not automatically change appearance after use/cancellatio
 
 See [deploy/README.md](deploy/README.md) and [deploy/WALLET.md](deploy/WALLET.md). SQLite and uploaded files must be persistent and backed up separately from Git. Keep API and worker on the same host/shared storage. Do not run the seed from the older frontend repository: its demo seed is a different operation.
 
-The root `test-*.sh` scripts are historical manual probes, with demo-account assumptions. Use `npm test` for the maintained regression suite.
+Use `npm test` for the maintained regression suite. Wallet signature tests require OpenSSL (available through Git for Windows, the system PATH, or `OPENSSL_BIN`).
 
 ## Social push delivery
 

@@ -27,13 +27,17 @@ async function tmdb(path: string): Promise<any> {
   }
 }
 const names = (list: any[] = []) => list.map(p => p.provider_name);
-export async function importMovieFromTmdb(tmdbId: number) {
+export async function importMovieFromTmdb(tmdbId: number, upcoming = false) {
   const m = await tmdb(`/movie/${tmdbId}?append_to_response=credits,videos,watch/providers,release_dates`);
   const ar = m['watch/providers']?.results?.AR ?? {};
   const arReleases = m.release_dates?.results?.find((r: any) => r.iso_3166_1 === 'AR')?.release_dates ?? [];
-  const localRelease = arReleases
-    .filter((r: any) => [2, 3].includes(r.type)).sort((a: any, b: any) => a.release_date.localeCompare(b.release_date))[0]?.release_date?.slice(0, 10);
   const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Argentina/Buenos_Aires', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+  const theatricalDates: string[] = arReleases
+    .filter((r: any) => [2, 3].includes(r.type) && !FESTIVAL.test(r.note ?? ''))
+    .map((r: any) => String(r.release_date).slice(0, 10)).sort();
+  // Upcoming discovery includes re-releases: keep the relevant future Argentine
+  // date rather than filtering the movie out because of its original premiere.
+  const localRelease = (upcoming ? theatricalDates.find(date => date > today) : undefined) ?? theatricalDates[0];
   const lastCinemaRelease: string | null = arReleases
     .filter((r: any) => [2, 3].includes(r.type) && !FESTIVAL.test(r.note ?? ''))
     .map((r: any) => String(r.release_date).slice(0, 10)).filter((d: string) => d <= today).sort().pop() ?? null;
@@ -100,9 +104,10 @@ export async function syncCatalog(report: (message: string) => void = () => {}) 
     report(`Actualizando detalles de ${ids.size} películas. Esto puede tardar unos minutos…`);
     const mapping = new Map<number, number>();
     const cinemaRelease = new Map<number, string | null>();
+    const upcomingIds = new Set(lists.upcoming.map(movie => movie.id));
     for (const id of ids) {
       if (lockLost) throw new Error('Se perdió el bloqueo de sincronización');
-      const movie = await importMovieFromTmdb(id);
+      const movie = await importMovieFromTmdb(id, upcomingIds.has(id));
       mapping.set(id, movie.id); cinemaRelease.set(id, movie.lastCinemaRelease); imported++;
       if (imported % 10 === 0 || imported === ids.size) report(`Películas actualizadas: ${imported}/${ids.size}`);
     }

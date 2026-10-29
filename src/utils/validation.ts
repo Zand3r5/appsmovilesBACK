@@ -25,8 +25,12 @@ export function cleanEmail(value: unknown){
     return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) && email.length <= 120 ? email : null;
 }
 
-export function isStrongPassword(value: unknown) {
-  return typeof value === "string" && value.length >= 8 && value.length <= 72
+export function isBcryptPassword(value: unknown): value is string {
+  return typeof value === 'string' && Buffer.byteLength(value, 'utf8') <= 72;
+}
+
+export function isStrongPassword(value: unknown): value is string {
+  return isBcryptPassword(value) && value.length >= 8
     && /[A-Za-z]/.test(value) && /\d/.test(value);
 }
 

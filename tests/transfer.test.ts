@@ -56,9 +56,12 @@ test('Upgrade preserves existing accounts, balances, vouchers, reference definit
     await mkdir(process.env.UPLOAD_DIR, { recursive: true });
     const oldImage = path.join(process.env.UPLOAD_DIR, '00000000-0000-4000-8000-000000000001.png');
     await sharp({ create: { width: 10, height: 10, channels: 3, background: '#ff0000' } }).png().toFile(oldImage);
-    run(['migrate', 'deploy']);
+    execFileSync(process.execPath, [tsx, 'scripts/setup-db.ts'], { env: process.env, stdio: 'pipe' });
     const { prisma } = await import('../src/prisma');
     try {
+      const restored = await prisma.review.findUniqueOrThrow({ where: { id: 801 } });
+      const { imageReference } = await import('../src/services/uploads');
+      assert.equal(await imageReference(restored.photo, 101), restored.photo);
       const { pointsSummary } = await import('../src/services/points');
       assert.equal((await pointsSummary(prisma, 101)).balance, 17);
       assert.equal((await pointsSummary(prisma, 102)).balance, -5);

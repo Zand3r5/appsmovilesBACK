@@ -4,8 +4,8 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { storeImage, uploadDirectory } from '../src/services/uploads';
 import { backupDatabase } from './backup-db';
-async function main() {
-  console.log('Backup previo:', await backupDatabase());
+export async function migrateImages({ backup = true } = {}) {
+  if (backup) console.log('Backup previo:', await backupDatabase());
   let converted = 0;
   // Only migrate files referenced by existing database rows. Never claim an
   // arbitrary public URL for a caller, and retain old files for existing links.
@@ -34,4 +34,4 @@ async function main() {
   }
   console.log('Imágenes migradas:', converted);
 }
-main().catch(error => { console.error(error.message); process.exitCode = 1; }).finally(() => prisma.$disconnect());
+if (require.main === module) migrateImages().catch(error => { console.error(error.message); process.exitCode = 1; }).finally(() => prisma.$disconnect());

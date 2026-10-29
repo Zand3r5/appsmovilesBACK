@@ -134,6 +134,31 @@ test('Social actions commit a backend outbox and share push delivery, retries an
       await prisma.notification.updateMany({ where: { actorId: expired.user.id }, data: { createdAt: new Date(Date.now() - 25 * 3600000) } });
       await tick(); assert.equal(messages.length, 8);
     });
+    await t.test('Re-likes refresh pending and canceled unsent deliveries but never resend ticketed or delivered events', async () => {
+      const recipient = await signup('RefreshOwner'), reactor = await signup('RefreshActor');
+      await register(recipient);
+      const subject = await prisma.review.create({ data: { movieId: movie.id, authorId: recipient.user.id, text: 'Refresh review' } });
+      const toggle = async () => assert.equal((await call(`/reviews/${subject.id}/like`, 'POST', {}, reactor.token)).status, 200);
+      const notice = () => prisma.notification.findFirstOrThrow({ where: { reviewId: subject.id, actorId: reactor.user.id } });
+      const before = messages.length;
+      await toggle();
+      const original = await notice();
+      await toggle(); await toggle();
+      const refreshed = await notice();
+      assert.notEqual(original.id, refreshed.id);
+      assert.equal(await prisma.pushDelivery.count({ where: { notificationId: refreshed.id, status: 'pending' } }), 1);
+      // Let the worker cancel the removed reaction, then restore it before any send.
+      await toggle(); await tick(); assert.equal(messages.length, before);
+      await toggle();
+      const restored = await notice();
+      assert.equal(await prisma.pushDelivery.count({ where: { notificationId: restored.id, status: 'pending' } }), 1);
+      await tick(); assert.equal(messages.length, before + 1);
+      assert.equal(messages.at(-1).data.notificationId, restored.id);
+      await toggle(); await toggle(); await tick(); assert.equal(messages.length, before + 1);
+      await tick(16);
+      assert.equal(await prisma.pushDelivery.count({ where: { userId: recipient.user.id, status: 'delivered' } }), 1);
+      await toggle(); await toggle(); await tick(); assert.equal(messages.length, before + 1);
+    });
     await t.test('A queue write failure rolls back both the friend request and notification', async () => {
       const next = await signup('Rollback');
       await prisma.$executeRawUnsafe(`CREATE TRIGGER reject_social_push BEFORE INSERT ON PushDelivery WHEN NEW.kind = 'social-notification' BEGIN SELECT RAISE(ABORT, 'fixture failure'); END`);

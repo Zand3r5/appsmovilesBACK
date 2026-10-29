@@ -4,6 +4,7 @@ import { mkdtemp, writeFile, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { generateKeyPairSync, createHash, createHmac } from 'node:crypto';
 import jwt from 'jsonwebtoken';
 import { unzipSync } from 'fflate';
@@ -94,7 +95,9 @@ test('Permanent points ledger, migration and signed reward vouchers', async t =>
       assert.equal(await prisma.redemption.count({ where: { id } }), 1);
     });
     await t.test('Apple pass package has a valid detached signature and short-lived session-bound download', async () => {
-      const openssl = (args: string[]) => execFileSync('openssl', args, { cwd: dir, stdio: 'pipe' });
+      const gitOpenSSL = path.join(process.env.ProgramFiles ?? 'C:\\Program Files', 'Git', 'usr', 'bin', 'openssl.exe');
+      const executable = process.env.OPENSSL_BIN || (process.platform === 'win32' && existsSync(gitOpenSSL) ? gitOpenSSL : 'openssl');
+      const openssl = (args: string[]) => execFileSync(executable, args, { cwd: dir, stdio: 'pipe' });
       openssl(['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', 'ca.key', '-out', 'ca.pem', '-days', '1', '-subj', '/CN=Fixture CA']);
       openssl(['req', '-newkey', 'rsa:2048', '-nodes', '-keyout', 'pass.key', '-out', 'pass.csr', '-subj', '/CN=pass.test.whatnext/OU=TESTTEAM']);
       openssl(['x509', '-req', '-in', 'pass.csr', '-CA', 'ca.pem', '-CAkey', 'ca.key', '-CAcreateserial', '-out', 'pass.pem', '-days', '1']);

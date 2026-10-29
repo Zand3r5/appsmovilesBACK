@@ -59,7 +59,7 @@ test('Database API, credential-checked sessions, permissions, rewards and schedu
   const { syncCatalog } = await import('../src/services/tmdb');
   const server = createApp().listen();
   await new Promise<void>(resolve => server.listening ? resolve() : server.once('listening', resolve));
-  const base = `http://127.0.0.1:${(server.address() as any).port}/api`;
+  let base = `http://127.0.0.1:${(server.address() as any).port}/api`;
   async function call(route: string, method = 'GET', body?: any, token?: string) {
     const response = await fetch(`${base}${route}`, { method, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) }, body: body === undefined ? undefined : JSON.stringify(body) });
     const data = response.status === 204 ? null : await response.json();
@@ -95,6 +95,47 @@ test('Database API, credential-checked sessions, permissions, rewards and schedu
       assert.equal((await call('/auth/me', 'GET', undefined, 'invalid-token')).status, 401);
       assert.equal((await call('/auth/verify', 'POST', { email, code: '000000' })).status, 404);
     });
+    // Isolate these credential regressions from the long suite's auth rate budget.
+    const authServer = createServer(createApp());
+    const originalBase = base;
+    base = `${await listen(authServer)}/api`;
+    try {
+    await t.test('Password byte limits apply to registration, login and administrator creation', async () => {
+      const password = 'é'.repeat(35) + 'A1'; // Exactly 72 UTF-8 bytes.
+      const email = 'unicode@example.test';
+      assert.equal((await call('/auth/register', 'POST', { name: 'Unicode', email, password: password + '2' })).status, 400);
+      assert.equal((await call('/auth/register', 'POST', { name: 'Unicode', email, password })).status, 201);
+      assert.equal((await call('/auth/login', 'POST', { email, password })).status, 200);
+      assert.equal((await call('/auth/login', 'POST', { email, password: password + '2' })).status, 400);
+      assert.throws(() => execFileSync(process.execPath, ['node_modules/tsx/dist/cli.mjs', 'scripts/bootstrap-admin.ts'], {
+        env: { ...process.env, ADMIN_NAME: 'Admin', ADMIN_EMAIL: 'admin-bytes@example.test', ADMIN_PASSWORD: password + '2' }, stdio: 'pipe',
+      }), /72 bytes UTF-8/);
+      assert.equal(await prisma.user.count({ where: { email: 'admin-bytes@example.test' } }), 0);
+    });
+    await t.test('Password changes verify credentials, preserve this session and atomically revoke others', async () => {
+      const account = await signup('password@example.test');
+      const login = await call('/auth/login', 'POST', { email: account.user.email, password: 'Testing1234' });
+      const body = { currentPassword: 'Testing1234', newPassword: 'Replacement123' };
+      assert.equal((await call('/auth/change-password', 'POST', body)).status, 401);
+      for (const invalid of [undefined, {}, { ...body, currentPassword: 'Wrong123' }, { ...body, newPassword: body.currentPassword }, { ...body, newPassword: 'weak' }, { ...body, newPassword: 'é'.repeat(36) + 'A1' }, { ...body, currentPassword: 'é'.repeat(36) + 'A1' }]) {
+        assert.equal((await call('/auth/change-password', 'POST', invalid, account.token)).status, 400);
+      }
+      assert.equal((await call('/auth/me', 'GET', undefined, login.data.token)).status, 200);
+      // Force revocation failure: neither the hash nor sessions may commit.
+      await prisma.$executeRawUnsafe(`CREATE TRIGGER reject_password_revoke BEFORE DELETE ON Session WHEN OLD.userId = ${account.user.id} BEGIN SELECT RAISE(ABORT, 'fixture failure'); END`);
+      try { assert.equal((await call('/auth/change-password', 'POST', body, account.token)).status, 500); }
+      finally { await prisma.$executeRawUnsafe('DROP TRIGGER reject_password_revoke'); }
+      const bcrypt = await import('bcrypt');
+      assert.ok(await bcrypt.compare('Testing1234', (await prisma.user.findUniqueOrThrow({ where: { id: account.user.id } })).passwordHash));
+      assert.equal(await prisma.session.count({ where: { userId: account.user.id } }), 2);
+      const changed = await call('/auth/change-password', 'POST', body, account.token);
+      assert.equal(changed.status, 200); assert.equal(typeof changed.data.message, 'string');
+      assert.equal((await call('/auth/me', 'GET', undefined, account.token)).status, 200);
+      assert.equal((await call('/auth/me', 'GET', undefined, login.data.token)).status, 401);
+      assert.equal((await call('/auth/login', 'POST', { email: account.user.email, password: 'Testing1234' })).status, 401);
+      assert.equal((await call('/auth/login', 'POST', { email: account.user.email, password: body.newPassword })).status, 200);
+    });
+    } finally { base = originalBase; await close(authServer); }
     const alice = await signup('alice@example.test'), bob = await signup('bob@example.test'), charlie = await signup('charlie@example.test');
     await t.test('Only the sync job contacts TMDB and the API serves persisted release snapshots', async () => {
       assert.deepEqual((await call('/releases/upcoming')).data, []);

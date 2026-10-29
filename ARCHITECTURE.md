@@ -1,4 +1,4 @@
-> Repository transfer and existing-data upgrade: see [TRANSFER.md](TRANSFER.md).
+> Existing-data upgrades: `npm run db:setup` creates a consistent backup, applies migrations and restores owned image references. See [README.md](README.md).
 
 # WhatNext: startup, data flow, background jobs and architecture defense
 
