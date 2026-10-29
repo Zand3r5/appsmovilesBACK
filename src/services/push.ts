@@ -1,5 +1,6 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
+import type { Prisma } from '@prisma/client';
 import { prisma } from '../prisma';
 import { fail } from '../utils/http';
 import { withJobLease } from './job';
@@ -8,6 +9,45 @@ const registration = z.object({
   token: z.string().max(255).regex(/^(Expo|Exponent)PushToken\[[A-Za-z0-9_-]+\]$/), platform: z.enum(['ios', 'android']),
 }).strict();
 const digest = (value: string) => createHash('sha256').update(value).digest('hex');
+// The notification row and its outbox entries commit with the social action.
+// Only devices registered at event time are targeted; old events aren't replayed
+// when somebody installs the app later. One actor/action/subject/device per day
+// prevents unlike/re-like or withdraw/re-request loops from spamming the phone.
+export async function createSocialNotification(tx: Prisma.TransactionClient, data: {
+  recipientId: number; actorId: number; type: 'friend_request' | 'review_like' | 'review_repost'; reviewId?: number; friendshipId?: number;
+}) {
+  const notification = await tx.notification.create({ data });
+  if (data.recipientId === data.actorId) return notification;
+  const now = new Date();
+  const devices = await tx.pushDevice.findMany({ where: { userId: data.recipientId, enabled: true, session: { expiresAt: { gt: now } } } });
+  for (const device of devices) {
+    const id = digest(`social:${data.recipientId}:${device.id}:${data.type}:${data.actorId}:${data.reviewId ?? 'friendship'}:${localDate(now)}`);
+    await tx.pushDelivery.upsert({ where: { id }, create: { id, userId: data.recipientId, deviceId: device.id,
+      kind: 'social-notification', notificationId: notification.id, nextAttemptAt: now }, update: {} });
+  }
+  return notification;
+}
+async function socialMessage(notificationId: number | null, userId: number, now: Date) {
+  if (!notificationId) return null;
+  const row = await prisma.notification.findUnique({ where: { id: notificationId }, include: { actor: { select: { name: true } }, review: { include: { movie: true } } } });
+  if (!row || row.recipientId !== userId || row.actorId === userId || row.read) return null;
+  if (now.getTime() - row.createdAt.getTime() >= 86400000) return null;
+  const common = { channelId: 'actividad', ttl: Math.max(1, Math.floor((row.createdAt.getTime() + 86400000 - now.getTime()) / 1000)) };
+  if (row.type === 'friend_request') {
+    const friendship = row.friendshipId ? await prisma.friendship.findUnique({ where: { id: row.friendshipId } }) : null;
+    if (!friendship || friendship.status !== 'pending' || friendship.requesterId !== row.actorId || friendship.addresseeId !== userId) return null;
+    return { ...common, title: 'Nueva solicitud de amistad', body: `${row.actor.name} quiere ser tu amigo en WhatNext.`,
+      data: { kind: 'friend-request', notificationId: row.id, userId: row.actorId, friendshipId: friendship.id } };
+  }
+  if (!row.review || row.review.authorId !== userId || row.review.movie.hidden) return null;
+  const where = { userId_reviewId: { userId: row.actorId, reviewId: row.review.id } };
+  const active = row.type === 'review_like' ? await prisma.like.findUnique({ where })
+    : row.type === 'review_repost' ? await prisma.repost.findUnique({ where }) : null;
+  if (!active) return null;
+  return { ...common, title: row.type === 'review_like' ? 'Le gustó tu reseña' : 'Compartieron tu reseña',
+    body: `${row.actor.name} ${row.type === 'review_like' ? 'le dio me gusta a' : 'compartió'} tu reseña de ${row.review.movie.title}.`,
+    data: { kind: row.type === 'review_like' ? 'review-like' : 'review-repost', notificationId: row.id, movieId: row.review.movieId, reviewId: row.review.id } };
+}
 export async function registerPushDevice(userId: number, sessionId: string, body: unknown) {
   const parsed = registration.safeParse(body);
   if (!parsed.success) fail(400, 'Registro de dispositivo inválido');
@@ -41,7 +81,7 @@ function localDate(now: Date) {
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Argentina/Buenos_Aires', year: 'numeric', month: '2-digit', day: '2-digit' }).format(now);
 }
 export async function runPushDelivery(now = new Date()) {
-  return withJobLease('release-push', async () => {
+  return withJobLease('notification-push', async () => {
     const today = localDate(now), due = new Date(`${today}T10:00:00-03:00`);
     if (now >= due) {
       const reminders = await prisma.releaseReminder.findMany({
@@ -61,15 +101,24 @@ export async function runPushDelivery(now = new Date()) {
       const claim = await prisma.pushDelivery.updateMany({ where: { id: delivery.id, status: delivery.status, updatedAt: delivery.updatedAt }, data: { status: 'sending', attempts: { increment: 1 } } });
       if (!claim.count) continue;
       const device = delivery.deviceId ? await prisma.pushDevice.findUnique({ where: { id: delivery.deviceId }, include: { session: true } }) : null;
-      const movie = await prisma.movie.findUnique({ where: { id: delivery.movieId } });
-      const subscription = await prisma.releaseReminder.findUnique({ where: { userId_movieId: { userId: delivery.userId, movieId: delivery.movieId } } });
-      if (!device?.enabled || device.userId !== delivery.userId || device.session.expiresAt <= now || !subscription || !movie || movie.hidden || movie.releaseDate !== today || delivery.releaseDate !== today) {
+      let message: { channelId: string; title: string; body: string; ttl: number; data: object } | null = null;
+      if (device?.enabled && device.userId === delivery.userId && device.session.expiresAt > now) {
+        if (delivery.kind === 'social-notification') message = await socialMessage(delivery.notificationId, delivery.userId, now);
+        else if (delivery.kind === 'release-reminder' && delivery.movieId) {
+          const movie = await prisma.movie.findUnique({ where: { id: delivery.movieId } });
+          const subscription = await prisma.releaseReminder.findUnique({ where: { userId_movieId: { userId: delivery.userId, movieId: delivery.movieId } } });
+          if (subscription && movie && !movie.hidden && movie.releaseDate === today && delivery.releaseDate === today) {
+            message = { channelId: 'estrenos', title: '🎬 ¡Hoy se estrena!', body: `${movie.title} ya está en cines. ¿Vas a verla?`,
+              ttl: Math.max(60, Math.floor((new Date(`${today}T23:59:59-03:00`).getTime() - now.getTime()) / 1000)),
+              data: { kind: 'release-reminder', movieId: movie.id } };
+          }
+        }
+      }
+      if (!message || !device) {
         await prisma.pushDelivery.update({ where: { id: delivery.id }, data: { status: 'canceled' } }); continue;
       }
       try {
-        const tickets = await expo('send', [{ to: device.token, sound: 'default', channelId: 'estrenos', title: '🎬 ¡Hoy se estrena!',
-          body: `${movie.title} ya está en cines. ¿Vas a verla?`, ttl: Math.max(60, Math.floor((new Date(`${today}T23:59:59-03:00`).getTime() - now.getTime()) / 1000)),
-          data: { kind: 'release-reminder', movieId: movie.id, deliveryId: delivery.id } }]);
+        const tickets = await expo('send', [{ to: device.token, sound: 'default', ...message, data: { ...message.data, deliveryId: delivery.id } }]);
         const ticket = tickets?.[0];
         if (ticket?.status === 'ok' && typeof ticket.id === 'string') {
           await prisma.pushDelivery.update({ where: { id: delivery.id }, data: { status: 'ticketed', ticketId: ticket.id, nextAttemptAt: new Date(now.getTime() + 15 * 60000), error: null } }); sent++;
@@ -108,7 +157,7 @@ async function checkReceipts(now: Date) {
 export async function pushDeviceStatus(userId: number, sessionId: string) {
   const devices = await prisma.pushDevice.findMany({ where: { userId, sessionId }, select: { platform: true, enabled: true, updatedAt: true } });
   const deliveries = await prisma.pushDelivery.findMany({ where: { userId }, orderBy: { createdAt: 'desc' }, take: 5,
-    select: { status: true, createdAt: true, receiptCheckedAt: true, error: true } });
+    select: { kind: true, status: true, createdAt: true, receiptCheckedAt: true, error: true } });
   return { devices, deliveries };
 }
 export async function sendPushTest(userId: number, sessionId: string) {

@@ -1,3 +1,4 @@
+import { createSocialNotification } from '../services/push';
 import type { Express } from 'express';
 import { prisma } from '../prisma';
 import { optionalAuth, requireAuth } from '../middlewares/auth';
@@ -75,7 +76,7 @@ export function reviewRoutes(app: Express) {
           await tx.notification.deleteMany({ where: { actorId: userId, reviewId, type } });
         } else {
           await (kind === 'like' ? tx.like.create({ data: { userId, reviewId } }) : tx.repost.create({ data: { userId, reviewId } }));
-          if (review.authorId !== userId) await tx.notification.create({ data: { actorId: userId, recipientId: review.authorId, reviewId, type } });
+          if (review.authorId !== userId) await createSocialNotification(tx, { actorId: userId, recipientId: review.authorId, reviewId, type });
         }
         await getAchievements(owner.authorId, tx);
         const updated = await tx.review.findUniqueOrThrow({ where: { id: reviewId }, include: reviewInclude });
