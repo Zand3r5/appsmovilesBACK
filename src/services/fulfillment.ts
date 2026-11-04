@@ -1,6 +1,6 @@
 import { prisma } from '../prisma';
 import { fail } from '../utils/http';
-import { getAchievements, getRewards } from './gamification';
+import { getRewards, syncAchievementsInTransaction } from './gamification';
 import { recordPoints, withUserPoints } from './points';
 
 export function redemptionStatus(row: { status: string; expiresAt: Date }) {
@@ -23,7 +23,7 @@ async function reverseRedemption(id: number, actorId: number, ownerOnly: boolean
   if (!owner) fail(404, 'Canje no encontrado');
   return withUserPoints(owner.userId, async tx => {
    
-    await getAchievements(owner.userId, tx);
+    await syncAchievementsInTransaction(owner.userId, tx);
     const row = await tx.redemption.findUniqueOrThrow({ where: { id } });
     const debit = await tx.pointEntry.findUnique({ where: { userId_key: { userId: row.userId, key: `redemption:${id}` } } });
     const credit = await tx.pointEntry.findUnique({ where: { userId_key: { userId: row.userId, key: `refund:${id}` } } });

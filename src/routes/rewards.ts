@@ -1,7 +1,7 @@
 import type { Express } from 'express';
 import { randomBytes } from 'node:crypto';
 import { requireAuth, requireRole } from '../middlewares/auth';
-import { getAchievements, getRewards } from '../services/gamification';
+import { getAchievements, getRewards, syncAchievementsInTransaction } from '../services/gamification';
 import { validateRedemption, useRedemption, refundRedemption, cancelRedemption } from '../services/fulfillment';
 import { movieId } from '../validation/movies';
 import { fail } from '../utils/http';
@@ -19,7 +19,7 @@ export function rewardRoutes(app: Express) {
   app.get('/api/points', requireAuth, async (req, res) => {
     const before = req.query.before === undefined ? undefined : movieId(req.query.before);
     res.json(await withUserPoints(req.userId!, async tx => {
-      await getAchievements(req.userId!, tx);
+      await syncAchievementsInTransaction(req.userId!, tx);
       const entries = await tx.pointEntry.findMany({ where: { userId: req.userId!, ...(before ? { id: { lt: before } } : {}) }, orderBy: { id: 'desc' }, take: 51 });
       return { ...await pointsSummary(tx, req.userId!), entries: entries.slice(0, 50), nextCursor: entries.length > 50 ? entries[49].id : null };
     }));
@@ -31,7 +31,7 @@ export function rewardRoutes(app: Express) {
     const result = await withUserPoints(req.userId!, async tx => {
       const reward = typeof req.body?.rewardId === 'string' ? await tx.reward.findUnique({ where: { id: req.body.rewardId } }) : null;
       if (!reward || !Number.isInteger(reward.cost) || reward.cost <= 0) fail(400, 'Premio no válido');
-      await getAchievements(req.userId!, tx);
+      await syncAchievementsInTransaction(req.userId!, tx);
       const balance = await pointsSummary(tx, req.userId!);
       if (balance.balance < reward.cost) fail(409, 'No te alcanzan los puntos');
       const redemption = await tx.redemption.create({ data: { userId: req.userId!, rewardId: reward.id, cost: reward.cost, code: randomBytes(8).toString('hex').toUpperCase(), expiresAt: new Date(Date.now() + 30 * 86400000) } });
