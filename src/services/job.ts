@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { prisma } from '../prisma';
+
 export async function withJobLease<T>(name: string, job: () => Promise<T>) {
   const owner = randomUUID();
   const acquired = await prisma.$transaction(async tx => {

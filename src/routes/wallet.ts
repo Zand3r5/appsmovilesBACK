@@ -4,6 +4,7 @@ import { requireAuth } from '../middlewares/auth';
 import { movieId } from '../validation/movies';
 import { fail } from '../utils/http';
 import { walletAvailability, createWalletLink, authorizeAppleDownload, applePass } from '../services/wallet';
+
 export function walletRoutes(app: Express) {
   app.get('/api/wallet/status', requireAuth, async (_req, res) => res.json(await walletAvailability()));
   app.post('/api/rewards/redemptions/:id/wallet', requireAuth, rateLimit({ windowMs: 60000, limit: 15 }), async (req, res) => {

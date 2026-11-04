@@ -1,8 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import { prisma } from '../prisma';
+
 const BASE = 'https://api.themoviedb.org/3';
 const CREW_JOBS = ['Screenplay', 'Director of Photography', 'Original Music Composer', 'Editor', 'Producer'];
 const FESTIVAL = /fest|bafici|ficuba|mar del plata/i;
+
 async function tmdb(path: string): Promise<any> {
   if (!process.env.TMDB_KEY) throw new Error('Falta TMDB_KEY en backend/.env');
   const url = new URL(`${process.env.TMDB_BASE_URL ?? BASE}${path}`);

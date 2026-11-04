@@ -2,16 +2,19 @@ import { z } from 'zod';
 import { prisma } from '../prisma';
 import { fail } from '../utils/http';
 import { getCinemaDirectory, inArgentinaRegion } from './cinemaDirectory';
+
 export const cinemaQuery = z.object({
   lat: z.number().min(-90).max(90), lng: z.number().min(-180).max(180),
   radiusM: z.number().int().min(1000).max(50000).default(15000),
 }).strict();
+
 const cinema = z.object({ id: z.string(), name: z.string(), address: z.string().nullable(), lat: z.number().min(-90).max(90), lng: z.number().min(-180).max(180) });
 export type SavedCinema = z.infer<typeof cinema>;
 const TTL = 6 * 3600000, MAX_STALE = 24 * 3600000;
 type Lookup = { data: SavedCinema[]; fetchedAt: Date; provider: 'openstreetmap' | 'sinca'; dataYear: number | null; stale: boolean };
 const snapshot = z.object({ data: z.array(cinema), provider: z.enum(['openstreetmap', 'sinca']), dataYear: z.number().nullable(), stale: z.boolean().default(false) });
 const pending = new Map<string, Promise<Lookup>>();
+
 export function distanceKm(lat1: number, lng1: number, lat2: number, lng2: number) {
   const radians = (n: number) => n * Math.PI / 180;
   const a = Math.sin(radians(lat2 - lat1) / 2) ** 2 + Math.cos(radians(lat1)) * Math.cos(radians(lat2)) * Math.sin(radians(lng2 - lng1) / 2) ** 2;
@@ -22,7 +25,7 @@ async function queryOverpass(lat: number, lng: number, radiusM: number): Promise
   const endpoints = process.env.OVERPASS_URL
     ? [process.env.OVERPASS_URL]
     : ['https://overpass-api.de/api/interpreter', 'https://overpass.private.coffee/api/interpreter'];
-  // Leave time for the directory fallback before the app's 20-second HTTP deadline.
+  
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 8000);
   async function ask(url: string, useGet = false): Promise<SavedCinema[]> {
@@ -45,7 +48,7 @@ async function queryOverpass(lat: number, lng: number, radiusM: number): Promise
       const parsed = cinema.safeParse({ id: `${el.type}/${el.id}`, name: tags.name ?? 'Cine sin nombre', address: address || null, lat: el.lat ?? el.center?.lat, lng: el.lon ?? el.center?.lon });
       if (parsed.success) rows.push(parsed.data);
     }
-    // A non-empty but entirely invalid payload must not win the provider race.
+    
     if (body.elements.length && !rows.length) throw new Error('Respuesta de cines inválida');
     return [...new Map(rows.map(c => [c.id, c])).values()];
   }
@@ -68,7 +71,7 @@ async function queryOverpass(lat: number, lng: number, radiusM: number): Promise
       const parsed = cinema.safeParse({ id: `${el.osm_type}/${el.osm_id}`, name: el.name || 'Cine sin nombre', address: address || null, lat: Number(el.lat), lng: Number(el.lon) });
       if (parsed.success) rows.push(parsed.data);
     }
-    // A geocoder is not an exhaustive POI source: an empty response must not hide cinemas.
+    
     if (!rows.length) throw new Error('Sin resultados del proveedor alternativo');
     return [...new Map(rows.map(c => [c.id, c])).values()];
   }
@@ -77,7 +80,7 @@ async function queryOverpass(lat: number, lng: number, radiusM: number): Promise
       if (controller.signal.aborted) throw error;
       return ask(url, true);
     }));
-    // Support an explicitly configured provider, without adding a public geocoder by default.
+    
     if (process.env.NOMINATIM_URL) providers.push(askNominatim(process.env.NOMINATIM_URL));
     return await Promise.any(providers);
   } catch {
@@ -95,7 +98,7 @@ async function fetchAndCache(key: string, lat: number, lng: number, radiusM: num
     if (preferStale || !inArgentinaRegion(lat, lng)) throw error;
     try {
       const directory = await getCinemaDirectory();
-      // Save only this area's results; the national snapshot has its own cache entry.
+      
       data = directory.data.filter(c => distanceKm(lat, lng, c.lat, c.lng) <= (radiusM + 1000) / 1000);
       if (!data.length) throw error; // No directory coverage is not evidence that no cinemas exist.
       provider = 'sinca'; dataYear = directory.dataYear; fetchedAt = directory.fetchedAt; stale = directory.stale;
@@ -115,7 +118,7 @@ export async function getNearbyCinemas(body: unknown) {
   const parsed = cinemaQuery.safeParse(body);
   if (!parsed.success) fail(400, 'Ubicación o radio inválido. El radio debe estar entre 1 y 50 km');
   const { lat, lng, radiusM } = parsed.data;
-  // Reuse an area cache without storing an account's precise GPS coordinates.
+  
   const centerLat = Number(lat.toFixed(2)), centerLng = Number(lng.toFixed(2));
   const key = `v2:${centerLat.toFixed(2)}:${centerLng.toFixed(2)}:${radiusM}`;
   const row = await prisma.cinemaLookup.findUnique({ where: { key } });
@@ -130,7 +133,7 @@ export async function getNearbyCinemas(body: unknown) {
       if (!work) {
         work = fetchAndCache(key, centerLat, centerLng, radiusM, !!(row && cached?.provider === 'openstreetmap' && cached.data.length && Date.now() - row.fetchedAt.getTime() <= MAX_STALE));
         pending.set(key, work);
-        // Cleanup without creating an unhandled rejected promise.
+        
         void work.then(() => pending.delete(key), () => pending.delete(key));
       }
       const fresh = await work;

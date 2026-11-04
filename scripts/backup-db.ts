@@ -3,6 +3,7 @@ import { mkdir, cp } from 'node:fs/promises';
 import path from 'node:path';
 import { prisma } from '../src/prisma';
 import { uploadDirectory } from '../src/services/uploads';
+
 export async function backupDatabase() {
   const location = process.env.DATABASE_URL?.slice(5);
   if (!location) throw new Error('Falta DATABASE_URL');

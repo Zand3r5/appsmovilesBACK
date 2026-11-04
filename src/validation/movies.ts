@@ -19,7 +19,7 @@ export type MovieInput = z.infer<typeof movieSchema>;
 export function validateMovieInput(body: unknown, partial = false): Partial<MovieInput> {
   const parsed = (partial ? movieSchema.partial().strict() : movieSchema.strict()).safeParse(body);
   if (!parsed.success) fail(400, parsed.error.issues.map(x => `${x.path.join('.')}: ${x.message}`).join('; '));
-  // Patch only submitted fields; defaults from create must not erase existing metadata.
+  
   const data = partial
     ? Object.fromEntries(Object.entries(parsed.data).filter(([key]) => Object.prototype.hasOwnProperty.call(body, key)))
     : parsed.data;

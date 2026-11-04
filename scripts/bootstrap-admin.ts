@@ -2,6 +2,7 @@ import '../src/config';
 import bcrypt from 'bcrypt';
 import { prisma } from '../src/prisma';
 import { cleanEmail, cleanText, isStrongPassword } from '../src/utils/validation';
+
 async function main() {
   const email = cleanEmail(process.env.ADMIN_EMAIL), name = cleanText(process.env.ADMIN_NAME, 60), password = process.env.ADMIN_PASSWORD;
   if (!email || !name || !isStrongPassword(password)) throw new Error('Configurá ADMIN_EMAIL, ADMIN_NAME y ADMIN_PASSWORD (al menos 8 caracteres, letras y números, máximo 72 bytes UTF-8)');

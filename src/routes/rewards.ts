@@ -6,6 +6,7 @@ import { validateRedemption, useRedemption, refundRedemption, cancelRedemption }
 import { movieId } from '../validation/movies';
 import { fail } from '../utils/http';
 import { recordPoints, pointsSummary, withUserPoints } from '../services/points';
+
 export function rewardRoutes(app: Express) {
   app.post('/api/admin/redemptions/validate', requireAuth, requireRole('moderator', 'superadmin'), async (req, res) => res.json(await validateRedemption(req.body?.code)));
   app.post('/api/admin/redemptions/use', requireAuth, requireRole('moderator', 'superadmin'), async (req, res) => res.json(await useRedemption(req.body?.code, req.userId!)));

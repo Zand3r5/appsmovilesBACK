@@ -4,6 +4,7 @@ import { prisma } from '../prisma';
 import { publicUserSelect, requireAuth } from '../middlewares/auth';
 import { parseId } from '../utils/validation';
 import { fail } from '../utils/http';
+
 const friendshipInclude = { requester: { select: publicUserSelect }, addressee: { select: publicUserSelect } } as const;
 export function socialRoutes(app: Express) {
   app.get('/api/friendships/status/:userId', requireAuth, async (req, res) => {

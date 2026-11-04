@@ -7,8 +7,7 @@ import { backupDatabase } from './backup-db';
 export async function migrateImages({ backup = true } = {}) {
   if (backup) console.log('Backup previo:', await backupDatabase());
   let converted = 0;
-  // Only migrate files referenced by existing database rows. Never claim an
-  // arbitrary public URL for a caller, and retain old files for existing links.
+
   async function migrateReference(ownerId: number, value: string | null) {
     if (!value) return null;
     if (value.startsWith('data:image/')) return storeImage(ownerId, value);

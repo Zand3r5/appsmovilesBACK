@@ -1,7 +1,7 @@
 import { prisma } from '../prisma';
 import { fail } from '../utils/http';
 
-// Argentina releases are delivered at 10:00 Buenos Aires time, independent of the device timezone.
+
 export function releaseReminderTime(releaseDate: string | null, now = new Date()): string | null {
   if (!releaseDate || !/^\d{4}-\d{2}-\d{2}$/.test(releaseDate)) return null;
   const date = new Date(`${releaseDate}T10:00:00-03:00`);

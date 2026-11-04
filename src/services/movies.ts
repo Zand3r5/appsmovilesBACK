@@ -72,7 +72,7 @@ export async function toMovieListDTO(movies: MovieRecord[], userId?: number) {
   const [stats, friends] = await Promise.all([getMovieStats(ids), getFriendsRatings(userId, ids)]);
   return movies.map((m) => toMovieDTO(m, stats.get(m.id), friends.get(m.id)));
 }
-// Catalog rules live here. Routes only validate the request and send the result.
+
 export function compareMovieRatings(a: { communityRating: number | null; title: string; id: number }, b: { communityRating: number | null; title: string; id: number }) {
   return (b.communityRating ?? -1) - (a.communityRating ?? -1) || a.title.localeCompare(b.title, 'es') || a.id - b.id;
 }
@@ -117,7 +117,7 @@ export async function getMovieRecommendations(id: number, userId?: number) {
     where: { id: { not: id }, hidden: false, genres: { some: { id: { in: movie.genres.map(g => g.id) } } } },
     include: { genres: true },
   });
-  // Rank the full candidate set before limiting, so the best match cannot be missed.
+  
   return (await toMovieListDTO(candidates, userId)).sort(compareMovieRatings).slice(0, 6);
 }
 
@@ -158,7 +158,7 @@ export async function saveMovie(body: unknown, userId: number, id?: number) {
 }
 
 export async function hideMovie(id: number) {
-  // A daily import must not undo moderation or delete reviews.
+  
   await prisma.movie.update({ where: { id }, data: { hidden: true } });
 }
 

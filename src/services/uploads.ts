@@ -4,6 +4,7 @@ import path from 'node:path';
 import sharp from 'sharp';
 import { prisma } from '../prisma';
 import { fail } from '../utils/http';
+
 export const uploadDirectory = () => path.resolve(process.env.UPLOAD_DIR ?? path.resolve(__dirname, '../../uploads'));
 const managedPath = /^\/media\/([0-9a-f-]{36}\.webp)$/;
 export async function storeImage(ownerId: number, image: unknown) {

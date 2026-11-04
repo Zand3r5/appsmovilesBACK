@@ -4,15 +4,13 @@ import type { Prisma } from '@prisma/client';
 import { prisma } from '../prisma';
 import { fail } from '../utils/http';
 import { withJobLease } from './job';
+
 const registration = z.object({
   id: z.uuid(), secret: z.string().regex(/^[a-f0-9]{64}$/),
   token: z.string().max(255).regex(/^(Expo|Exponent)PushToken\[[A-Za-z0-9_-]+\]$/), platform: z.enum(['ios', 'android']),
 }).strict();
 const digest = (value: string) => createHash('sha256').update(value).digest('hex');
-// The notification row and its outbox entries commit with the social action.
-// Only devices registered at event time are targeted; old events aren't replayed
-// when somebody installs the app later. One actor/action/subject/device per day
-// prevents unlike/re-like or withdraw/re-request loops from spamming the phone.
+
 export async function createSocialNotification(tx: Prisma.TransactionClient, data: {
   recipientId: number; actorId: number; type: 'friend_request' | 'review_like' | 'review_repost'; reviewId?: number; friendshipId?: number;
 }) {

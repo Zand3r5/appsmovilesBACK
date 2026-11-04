@@ -8,7 +8,7 @@ import { prisma } from '../prisma';
 import { fail } from '../utils/http';
 
 export type WalletProvider = 'apple' | 'google';
-// Domain-separated signing key: a browser download ticket must never authenticate API requests.
+
 const downloadKey = () => createHmac('sha256', process.env.JWT_SECRET!).update('whatnext.apple-download.v1').digest();
 const appleVariables = ['WALLET_APPLE_PASS_TYPE_ID', 'WALLET_APPLE_TEAM_ID', 'WALLET_APPLE_CERT_PATH', 'WALLET_APPLE_KEY_PATH', 'WALLET_APPLE_WWDR_PATH', 'WALLET_PUBLIC_BASE_URL'];
 const googleVariables = ['WALLET_GOOGLE_ISSUER_ID', 'WALLET_GOOGLE_CLASS_ID', 'WALLET_GOOGLE_CREDENTIALS_PATH'];

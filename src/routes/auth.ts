@@ -24,6 +24,8 @@ export function authRoutes(app: Express) {
     const user = await prisma.user.create({ data: { name: name!, email: email!, passwordHash: await bcrypt.hash(password, 10) } });
     res.status(201).json({ token: await createSession(user.id), user: await sessionUser(user.id) });
   });
+
+  // TODO: Pasar validacion del email y password al front ✅ Valida en el front y backend ahora
   app.post('/api/auth/login', async (req, res) => {
     const email = cleanEmail(req.body?.email), password = req.body?.password;
     if (!email || !isBcryptPassword(password)) fail(400, 'Completá email y contraseña (máximo 72 bytes UTF-8)');
@@ -32,23 +34,7 @@ export function authRoutes(app: Express) {
     res.json({ token: await createSession(user.id), user: await sessionUser(user.id) });
   });
   app.get('/api/auth/me', requireAuth, async (req, res) => res.json(await sessionUser(req.userId!)));
-  app.post('/api/auth/change-password', requireAuth, async (req, res) => {
-    const { currentPassword, newPassword } = req.body ?? {};
-    if (!isBcryptPassword(currentPassword) || !currentPassword || !isStrongPassword(newPassword)) fail(400, 'Ingresá la contraseña actual y una nueva de al menos 8 caracteres con letras y números y hasta 72 bytes UTF-8');
-    if (currentPassword === newPassword) fail(400, 'La nueva contraseña debe ser diferente de la actual');
-    const user = await prisma.user.findUniqueOrThrow({ where: { id: req.userId! } });
-    if (!await bcrypt.compare(currentPassword, user.passwordHash)) fail(400, 'La contraseña actual es incorrecta');
-    const passwordHash = await bcrypt.hash(newPassword, 10);
-    await prisma.$transaction(async tx => {
-      // Compare-and-swap prevents concurrent password changes using stale credentials.
-      const changed = await tx.user.updateMany({ where: { id: user.id, passwordHash: user.passwordHash }, data: { passwordHash } });
-      if (!changed.count) fail(409, 'La contraseña cambió. Volvé a intentarlo');
-      const session = await tx.session.findUnique({ where: { id: req.sessionId! } });
-      if (!session || session.userId !== user.id || session.expiresAt <= new Date()) fail(401, 'Tu sesión venció, volvé a iniciar sesión');
-      await tx.session.deleteMany({ where: { userId: user.id, id: { not: req.sessionId! } } });
-    });
-    res.json({ message: 'Contraseña actualizada. Se cerraron las sesiones en los demás dispositivos.' });
-  });
+  
   app.post('/api/auth/logout', requireAuth, async (req, res) => {
     await prisma.session.deleteMany({ where: { id: req.sessionId } });
     res.status(204).end();

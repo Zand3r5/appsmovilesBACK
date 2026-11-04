@@ -3,7 +3,7 @@ import { prisma } from '../prisma';
 
 export async function withUserPoints<T>(userId: number, work: (tx: Prisma.TransactionClient) => Promise<T>) {
   return prisma.$transaction(async tx => {
-    // Serialize awards, spending and refunds before reading the balance.
+    
     await tx.user.update({ where: { id: userId }, data: { id: userId } });
     return work(tx);
   });

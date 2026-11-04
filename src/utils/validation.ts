@@ -3,16 +3,6 @@ export function parseId(value: unknown){
     return Number.isInteger(id) && id > 0 ? id : null;
 }
 
-export function pick(source: any, keys: string[]){
-    const result: any = {};
-    for(const key of keys){
-        if(source[key] !== undefined){
-            result[key] = source[key];
-        }
-    }
-    return result;
-}
-
 export function cleanText(value: unknown, max: number){
 if (typeof value !== 'string') return null;
 const text = value.trim();
