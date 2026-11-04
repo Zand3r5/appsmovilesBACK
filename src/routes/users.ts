@@ -11,6 +11,13 @@ async function userReposts(userId: number, viewer?: number) {
   const rows = await prisma.repost.findMany({ where: { userId, review: { movie: { hidden: false } } }, include: { review: { include: reviewInclude } }, orderBy: { createdAt: 'desc' } });
   return rows.map(r => reviewDTO(r.review, viewer));
 }
+async function publicProfile(id: number, viewer?: number) {
+  const user = await prisma.user.findUnique({ where: { id }, select: publicUserSelect });
+  if (!user) fail(404, 'Usuario no encontrado');
+  const [comments, reposts, achievements, friends] = await Promise.all([listReviews({ authorId: id }, viewer), userReposts(id, viewer), getAchievements(id), getFriendIds(id)]);
+  return { user, comments, reposts, rank: await calculateRank(comments.length), stats: { comments: comments.length, reposts: reposts.length, likesReceived: achievements.profile.likes, points: achievements.totalPoints, friends: friends.length } };
+}
+
 export function userRoutes(app: Express) {
   app.patch('/api/users/me', requireAuth, async (req, res) => {
     const name = cleanText(req.body?.name, 60), email = cleanEmail(req.body?.email);
@@ -29,13 +36,9 @@ export function userRoutes(app: Express) {
     if (id === req.userId && req.body.role !== 'superadmin') fail(400, 'No podés quitarte tu propio acceso de administración');
     res.json(await prisma.user.update({ where: { id: id! }, data: { role: req.body.role }, select: { ...publicUserSelect, email: true } }));
   });
-  app.get('/api/users/:id', optionalAuth, async (req, res) => {
-    const id = parseId(req.params.id) ?? 0;
-    const user = await prisma.user.findUnique({ where: { id }, select: publicUserSelect });
-    if (!user) fail(404, 'Usuario no encontrado');
-    const [comments, reposts, achievements, friends] = await Promise.all([listReviews({ authorId: id }, req.userId), userReposts(id, req.userId), getAchievements(id), getFriendIds(id)]);
-    res.json({ user, comments, reposts, rank: await calculateRank(comments.length), stats: { comments: comments.length, reposts: reposts.length, likesReceived: achievements.profile.likes, points: achievements.totalPoints, friends: friends.length } });
-  });
+  app.get('/api/users/me', requireAuth, async (req, res) => res.json(await publicProfile(req.userId!, req.userId)));
+  app.get('/api/users/:id', optionalAuth, async (req, res) => res.json(await publicProfile(parseId(req.params.id) ?? 0, req.userId)));
+
   app.get('/api/users/:id/reviews', optionalAuth, async (req, res) => res.json(await listReviews({ authorId: parseId(req.params.id) ?? 0 }, req.userId)));
   app.get('/api/users/:id/reposts', optionalAuth, async (req, res) => res.json(await userReposts(parseId(req.params.id) ?? 0, req.userId)));
 }
