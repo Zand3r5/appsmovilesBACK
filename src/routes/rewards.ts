@@ -1,7 +1,7 @@
 import type { Express } from 'express';
 import { randomBytes } from 'node:crypto';
 import { requireAuth, requireRole } from '../middlewares/auth';
-import { getAchievements, getRewards, syncAchievementsInTransaction } from '../services/gamification';
+import { getAchievements, getRewards, getRewardsInTransaction, syncAchievementsInTransaction } from '../services/gamification';
 import { validateRedemption, useRedemption, refundRedemption, cancelRedemption } from '../services/fulfillment';
 import { movieId } from '../validation/movies';
 import { fail } from '../utils/http';
@@ -36,7 +36,7 @@ export function rewardRoutes(app: Express) {
       if (balance.balance < reward.cost) fail(409, 'No te alcanzan los puntos');
       const redemption = await tx.redemption.create({ data: { userId: req.userId!, rewardId: reward.id, cost: reward.cost, code: randomBytes(8).toString('hex').toUpperCase(), expiresAt: new Date(Date.now() + 30 * 86400000) } });
       await recordPoints(tx, req.userId!, `redemption:${redemption.id}`, 'redemption', -reward.cost, `Canje: ${reward.title}`, redemption.createdAt);
-      return { success: true, redemptionId: redemption.id, code: redemption.code, rewards: await getRewards(req.userId!, tx) };
+      return { success: true, redemptionId: redemption.id, code: redemption.code, rewards: await getRewardsInTransaction(req.userId!, tx) };
     });
     res.status(201).json(result);
   });

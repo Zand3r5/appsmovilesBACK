@@ -1,9 +1,9 @@
 import { prisma } from '../prisma';
 import { fail } from '../utils/http';
-import { getRewards, syncAchievementsInTransaction } from './gamification';
+import { getRewardsInTransaction, syncAchievementsInTransaction } from './gamification';
 import { recordPoints, withUserPoints } from './points';
 
-export function redemptionStatus(row: { status: string; expiresAt: Date }) {
+function redemptionStatus(row: { status: string; expiresAt: Date }) {
   return row.status === 'active' && row.expiresAt <= new Date() ? 'expired' : row.status;
 }
 export async function validateRedemption(code: unknown) {
@@ -30,7 +30,7 @@ async function reverseRedemption(id: number, actorId: number, ownerOnly: boolean
     if (!debit || debit.kind !== 'redemption' || debit.amount !== -row.cost || row.cost <= 0) fail(409, 'No se pudo verificar el débito original. Contactá al administrador.');
     if (ownerOnly && row.status === 'canceled' && !row.usedAt && row.refundedAt && credit?.kind === 'refund' && credit.amount === row.cost) {
       
-      return { canceled: true, alreadyCanceled: true, rewards: await getRewards(row.userId, tx) };
+      return { canceled: true, alreadyCanceled: true, rewards: await getRewardsInTransaction(row.userId, tx) };
     }
     if (credit) fail(409, 'Este canje ya tiene un reintegro registrado');
     const changed = await tx.redemption.updateMany({
@@ -41,7 +41,7 @@ async function reverseRedemption(id: number, actorId: number, ownerOnly: boolean
     
     const reward = await tx.reward.findUnique({ where: { id: row.rewardId } });
     await recordPoints(tx, row.userId, `refund:${id}`, 'refund', row.cost, `${ownerOnly ? 'Anulación' : 'Reintegro'}: ${reward?.title ?? row.rewardId}`);
-    return ownerOnly ? { canceled: true, alreadyCanceled: false, rewards: await getRewards(row.userId, tx) } : { refunded: true };
+    return ownerOnly ? { canceled: true, alreadyCanceled: false, rewards: await getRewardsInTransaction(row.userId, tx) } : { refunded: true };
   });
 }
 export async function refundRedemption(id: number, actorId: number) {

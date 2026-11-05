@@ -29,7 +29,7 @@ async function tmdb(path: string): Promise<any> {
   }
 }
 const names = (list: any[] = []) => list.map(p => p.provider_name);
-export async function importMovieFromTmdb(tmdbId: number, upcoming = false) {
+async function importMovieFromTmdb(tmdbId: number, upcoming = false) {
   const m = await tmdb(`/movie/${tmdbId}?append_to_response=credits,videos,watch/providers,release_dates`);
   const ar = m['watch/providers']?.results?.AR ?? {};
   const arReleases = m.release_dates?.results?.find((r: any) => r.iso_3166_1 === 'AR')?.release_dates ?? [];

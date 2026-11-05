@@ -13,7 +13,7 @@ type MovieMetadata = Pick<MovieInput, 'actors' | 'directors' | 'crew' | 'trailer
 
 const IMG = "https://image.tmdb.org/t/p/";
 
-export async function getMovieStats(movieIds: number[]) {
+async function getMovieStats(movieIds: number[]) {
   const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
   const [all, recent] = await Promise.all([
     prisma.review.groupBy({
@@ -40,7 +40,7 @@ export async function getMovieStats(movieIds: number[]) {
 }
 
 // La película con la forma que hoy usa la app
-export function toMovieDTO(movie: MovieRecord, stats?: MovieStats, friendsRating?: FriendsRating) {
+function toMovieDTO(movie: MovieRecord, stats?: MovieStats, friendsRating?: FriendsRating) {
   const meta = JSON.parse(movie.metadata || "{}") as Partial<MovieMetadata>;
   return {
     id: movie.id,
@@ -67,13 +67,13 @@ export function toMovieDTO(movie: MovieRecord, stats?: MovieStats, friendsRating
   };
 }
 
-export async function toMovieListDTO(movies: MovieRecord[], userId?: number) {
+async function toMovieListDTO(movies: MovieRecord[], userId?: number) {
   const ids = movies.map((m) => m.id);
   const [stats, friends] = await Promise.all([getMovieStats(ids), getFriendsRatings(userId, ids)]);
   return movies.map((m) => toMovieDTO(m, stats.get(m.id), friends.get(m.id)));
 }
 
-export function compareMovieRatings(a: { communityRating: number | null; title: string; id: number }, b: { communityRating: number | null; title: string; id: number }) {
+function compareMovieRatings(a: { communityRating: number | null; title: string; id: number }, b: { communityRating: number | null; title: string; id: number }) {
   return (b.communityRating ?? -1) - (a.communityRating ?? -1) || a.title.localeCompare(b.title, 'es') || a.id - b.id;
 }
 

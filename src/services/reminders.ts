@@ -2,7 +2,7 @@ import { prisma } from '../prisma';
 import { fail } from '../utils/http';
 
 
-export function releaseReminderTime(releaseDate: string | null, now = new Date()): string | null {
+function releaseReminderTime(releaseDate: string | null, now = new Date()): string | null {
   if (!releaseDate || !/^\d{4}-\d{2}-\d{2}$/.test(releaseDate)) return null;
   const date = new Date(`${releaseDate}T10:00:00-03:00`);
   if (!Number.isFinite(date.getTime()) || date.toISOString().slice(0, 10) !== releaseDate || date <= now) return null;

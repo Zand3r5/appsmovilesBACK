@@ -3,7 +3,7 @@ import { prisma } from '../prisma';
 import { fail } from '../utils/http';
 import { getCinemaDirectory, inArgentinaRegion } from './cinemaDirectory';
 
-export const cinemaQuery = z.object({
+const cinemaQuery = z.object({
   lat: z.number().min(-90).max(90), lng: z.number().min(-180).max(180),
   radiusM: z.number().int().min(1000).max(50000).default(15000),
 }).strict();
@@ -15,7 +15,7 @@ type Lookup = { data: SavedCinema[]; fetchedAt: Date; provider: 'openstreetmap' 
 const snapshot = z.object({ data: z.array(cinema), provider: z.enum(['openstreetmap', 'sinca']), dataYear: z.number().nullable(), stale: z.boolean().default(false) });
 const pending = new Map<string, Promise<Lookup>>();
 
-export function distanceKm(lat1: number, lng1: number, lat2: number, lng2: number) {
+function distanceKm(lat1: number, lng1: number, lat2: number, lng2: number) {
   const radians = (n: number) => n * Math.PI / 180;
   const a = Math.sin(radians(lat2 - lat1) / 2) ** 2 + Math.cos(radians(lat1)) * Math.cos(radians(lat2)) * Math.sin(radians(lng2 - lng1) / 2) ** 2;
   return 2 * 6371 * Math.asin(Math.min(1, Math.sqrt(a)));

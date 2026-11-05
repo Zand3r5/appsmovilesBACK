@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { prisma } from '../prisma';
 import type { SavedCinema } from './cinemas';
 
-export const CINEMA_DIRECTORY_URL = 'https://datos.cultura.gob.ar/dataset/37305de4-3cce-4d4b-9d9a-fec3ca61d09f/resource/f7a8edb8-9208-41b0-8f19-d72811dcea97/download/salas_cine.csv';
+const CINEMA_DIRECTORY_URL = 'https://datos.cultura.gob.ar/dataset/37305de4-3cce-4d4b-9d9a-fec3ca61d09f/resource/f7a8edb8-9208-41b0-8f19-d72811dcea97/download/salas_cine.csv';
 const key = 'directory:sinca:argentina:v1';
 const TTL = 24 * 3600000, MAX_STALE = 30 * 86400000;
 const snapshotSchema = z.object({
@@ -14,7 +14,7 @@ const snapshotSchema = z.object({
 type Directory = z.infer<typeof snapshotSchema> & { fetchedAt: Date; stale: boolean };
 let pending: Promise<Directory> | undefined;
 
-export function parseCinemaDirectory(csv: string): { data: SavedCinema[]; dataYear: number | null } {
+function parseCinemaDirectory(csv: string): { data: SavedCinema[]; dataYear: number | null } {
   const rows = parse(csv, { columns: true, bom: true, skip_empty_lines: true, trim: true, max_record_size: 20000 }) as Record<string, string>[];
   if (!rows.length || !['nombre', 'direccion', 'latitud', 'longitud'].every(field => field in rows[0])) throw new Error('Invalid cinema directory columns');
   const data: SavedCinema[] = [], years: number[] = [];

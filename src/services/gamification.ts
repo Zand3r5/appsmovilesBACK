@@ -1,5 +1,4 @@
-import type { Prisma, PrismaClient, Redemption } from '@prisma/client';
-import { prisma } from '../prisma';
+import type { Prisma, Redemption } from '@prisma/client';
 import { calculateRank } from './ranks';
 import { initializePoints, recordPoints, pointsSummary, withUserPoints } from './points';
 export { calculateRank };
@@ -52,11 +51,14 @@ export async function syncAchievementsInTransaction(userId: number, tx: Prisma.T
   return { list, totalPoints: summary.earned, availablePoints: summary.balance, profile: { reviews: reviews.length, likes: reviews.reduce((sum, r) => sum + r._count.likes, 0) } };
 }
 
-export async function getRewards(userId: number, db: Prisma.TransactionClient | PrismaClient = prisma): Promise<{
+export function getRewards(userId: number) {
+  return withUserPoints(userId, tx => getRewardsInTransaction(userId, tx));
+}
+
+export async function getRewardsInTransaction(userId: number, db: Prisma.TransactionClient): Promise<{
   catalog: Prisma.RewardGetPayload<{}>[]; spentPoints: number; availablePoints: number;
   redeemed: (Redemption & { title?: string; description?: string; icon?: string; date: Date })[];
 }> {
-  if ('$transaction' in db) return withUserPoints(userId, tx => getRewards(userId, tx));
   await syncAchievementsInTransaction(userId, db);
   const summary = await pointsSummary(db, userId);
   const catalog = await db.reward.findMany({ orderBy: { cost: 'asc' } });
