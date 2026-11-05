@@ -5,6 +5,8 @@ import { prisma } from '../prisma';
 import { fail } from '../utils/http';
 import { withJobLease } from './job';
 
+// No se va a usar mas el push para notificaciones, queda pendiente sacar las dependencias en las otras pagina de reminders.ts.
+
 const registration = z.object({
   id: z.uuid(), secret: z.string().regex(/^[a-f0-9]{64}$/),
   token: z.string().max(255).regex(/^(Expo|Exponent)PushToken\[[A-Za-z0-9_-]+\]$/), platform: z.enum(['ios', 'android']),
@@ -22,8 +24,7 @@ export async function createSocialNotification(tx: Prisma.TransactionClient, dat
     const id = digest(`social:${data.recipientId}:${device.id}:${data.type}:${data.actorId}:${data.reviewId ?? 'friendship'}:${localDate(now)}`);
     await tx.pushDelivery.upsert({ where: { id }, create: { id, userId: data.recipientId, deviceId: device.id,
       kind: 'social-notification', notificationId: notification.id, nextAttemptAt: now }, update: {} });
-    // Refresh only unclaimed work. A ticket or an in-flight send must retain its
-    // once-per-day identity even if the original notification was removed.
+
     await tx.pushDelivery.updateMany({ where: { id, ticketId: null, status: { in: ['pending', 'canceled'] } },
       data: { notificationId: notification.id, status: 'pending', nextAttemptAt: now } });
   }
