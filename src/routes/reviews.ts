@@ -12,7 +12,8 @@ import { syncAchievementsInTransaction } from '../services/gamification';
 
 function reviewInput(body: any) {
   const text = cleanText(body?.text, 5000);
-  if (!text || !isRating(body?.rating) || !isPhoto(body?.photo)) fail(400, 'Reseña inválida: revisá texto, puntaje y foto');
+  if (!text || !isRating(body?.rating) || !body?.photo || !isPhoto(body.photo)) fail(400, 'Reseña inválida: revisá texto, puntaje y foto');
+
   return { text: text!, rating: body.rating as number, photo: body.photo ?? null };
 }
 export function reviewRoutes(app: Express) {
@@ -64,6 +65,7 @@ export function reviewRoutes(app: Express) {
       const reviewId = parseId(req.params.id) ?? 0, userId = req.userId!;
       const owner = await prisma.review.findUnique({ where: { id: reviewId }, select: { authorId: true } });
       if (!owner) fail(404, 'Reseña no encontrada');
+      if (owner.authorId === userId) fail(403, 'No podés reaccionar a tu propia reseña');
       const result = await withUserPoints(owner.authorId, async tx => {
         await syncAchievementsInTransaction(owner.authorId, tx);
         const review = await tx.review.findUnique({ where: { id: reviewId } });
