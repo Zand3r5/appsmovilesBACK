@@ -1,20 +1,29 @@
-# WhatNext: backend
+# WhatNext
 
-API en Express, Prisma y SQLite, con un worker para tareas programadas. Requiere Node 22.
+Requiere Node 22.
 
-## Instalación
+## Back
+
+En la carpeta del back:
 
 ```powershell
 npm ci
-Copy-Item .env.example .env
+cp .env.example .env
+npm run db:setup
+npm run catalog:sync
+npm run dev
 ```
 
-En `.env`, completá `JWT_SECRET` con un texto largo al azar. Para sincronizar el catálogo, completá también `TMDB_KEY`.
+## Front
+
+En otra terminal, en la carpeta del front:
 
 ```powershell
-npm run db:setup
+npm ci
+npm start
 ```
 
+Escaneá el QR con Expo Go, con el celular y la computadora en la misma red.
 ## Crear el administrador
 
 ```powershell
@@ -22,15 +31,13 @@ $env:ADMIN_EMAIL = "admin@ejemplo.com"
 $env:ADMIN_NAME = "Admin"
 $env:ADMIN_PASSWORD = "UnaClave1234"
 npm run admin:create
-```
-
-## Ejecutar
-
-En dos terminales:
-
-```powershell
+npm run catalog:sync
 npm run dev
-npm run worker
 ```
 
-La API queda en `http://localhost:3000/api`.
+## usuarios predeterminados
+ mail: mateo.demo@whatsnext.app
+contra: Demo1234
+
+mail: sofia.demo@whatsnext.app
+contra: Demo1234
