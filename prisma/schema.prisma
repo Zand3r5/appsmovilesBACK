@@ -14,10 +14,7 @@ model User {
   passwordHash String
   role         String   @default("user")
   createdAt    DateTime @default(now())
-  pushDevices PushDevice[]
-  pushDeliveries PushDelivery[]
   sessions Session[]
-  releaseReminders ReleaseReminder[]
 
   reviews       Review[]
   likes         Like[]
@@ -46,9 +43,7 @@ model Movie {
   hidden       Boolean  @default(false)
   syncedAt     DateTime @default(now())
 
-  pushDeliveries PushDelivery[]
   catalogEntries CatalogEntry[]
-  releaseReminders ReleaseReminder[]
   genres  Genre[]
   reviews Review[]
 }
@@ -116,7 +111,6 @@ model Friendship {
 }
 
 model Notification {
-  pushDeliveries PushDelivery[]
   id           Int      @id @default(autoincrement())
   recipient    User     @relation("recipient", fields: [recipientId], references: [id], onDelete: Cascade)
   recipientId  Int
@@ -151,7 +145,6 @@ model Redemption {
   @@index([userId, status])
 }
 model Session {
-  pushDevices PushDevice[]
   id String @id
   userId Int
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -185,60 +178,12 @@ model JobLock {
   expiresAt DateTime
 }
 
-model ReleaseReminder {
-  userId Int
-  movieId Int
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-  movie Movie @relation(fields: [movieId], references: [id], onDelete: Cascade)
-  createdAt DateTime @default(now())
-  @@id([userId, movieId])
-  @@index([movieId])
-}
-
 model CinemaLookup {
   key String @id
   data String
   fetchedAt DateTime @default(now())
   expiresAt DateTime
   @@index([expiresAt])
-}
-
-model PushDevice {
-  id String @id
-  secretHash String
-  userId Int
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-  sessionId String
-  session Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  token String @unique
-  platform String
-  enabled Boolean @default(true)
-  updatedAt DateTime @updatedAt
-  deliveries PushDelivery[]
-  @@index([userId, enabled])
-}
-
-model PushDelivery {
-  id String @id
-  userId Int
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-  movieId Int?
-  movie Movie? @relation(fields: [movieId], references: [id], onDelete: Cascade)
-  kind String @default("release-reminder")
-  notificationId Int?
-  notification Notification? @relation(fields: [notificationId], references: [id], onDelete: SetNull)
-  deviceId String?
-  device PushDevice? @relation(fields: [deviceId], references: [id], onDelete: SetNull)
-  releaseDate String?
-  status String @default("pending")
-  attempts Int @default(0)
-  nextAttemptAt DateTime @default(now())
-  ticketId String?
-  receiptCheckedAt DateTime?
-  error String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  @@index([status, nextAttemptAt])
 }
 
 model Upload {

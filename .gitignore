@@ -16,8 +16,6 @@ uploads/
 .env.production
 prisma/backups/
 
-prisma/worker-heartbeat
-
 credentials/
 *.p12
 *.p8

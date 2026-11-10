@@ -1,44 +1,35 @@
 import type { Express } from 'express';
-import { prisma } from '../prisma';
-import { optionalAuth, publicUserSelect, requireAuth, requireRole, sessionUser } from '../middlewares/auth';
-import { cleanEmail, cleanText, parseId, ROLES } from '../utils/validation';
-import { fail } from '../utils/http';
-import { getAchievements, calculateRank } from '../services/gamification';
-import { listReviews, reviewDTO, reviewInclude } from '../services/reviews';
-import { getFriendIds } from '../services/social';
-
-async function userReposts(userId: number, viewer?: number) {
-  const rows = await prisma.repost.findMany({ where: { userId, review: { movie: { hidden: false } } }, include: { review: { include: reviewInclude } }, orderBy: { createdAt: 'desc' } });
-  return rows.map(r => reviewDTO(r.review, viewer));
-}
-async function publicProfile(id: number, viewer?: number) {
-  const user = await prisma.user.findUnique({ where: { id }, select: publicUserSelect });
-  if (!user) fail(404, 'Usuario no encontrado');
-  const [comments, reposts, achievements, friends] = await Promise.all([listReviews({ authorId: id }, viewer), userReposts(id, viewer), getAchievements(id), getFriendIds(id)]);
-  return { user, comments, reposts, rank: await calculateRank(comments.length), stats: { comments: comments.length, reposts: reposts.length, likesReceived: achievements.profile.likes, points: achievements.totalPoints, friends: friends.length } };
-}
+import { optionalAuth, requireAuth, requireRole } from '../middlewares/auth';
+import { listReviews } from '../services/reviews';
+import {
+  getPublicProfile,
+  getUserReposts,
+  listUsers,
+  updateCurrentUser,
+  updateUserRole,
+} from '../services/users';
+import { parseId } from '../utils/validation';
 
 export function userRoutes(app: Express) {
   app.patch('/api/users/me', requireAuth, async (req, res) => {
-    const name = cleanText(req.body?.name, 60), email = cleanEmail(req.body?.email);
-    if (!name || !email) fail(400, 'Nombre o email inválido');
-    await prisma.$transaction(async tx => {
-      const user = await tx.user.findUniqueOrThrow({ where: { id: req.userId } });
-      await tx.user.update({ where: { id: req.userId }, data: { name: name!, email: email! } });
-      if (email !== user.email) await tx.session.deleteMany({ where: { userId: req.userId, id: { not: req.sessionId } } });
-    });
-    res.json(await sessionUser(req.userId!));
+    res.json(await updateCurrentUser(req.userId!, req.sessionId!, req.body));
   });
-  app.get('/api/users', requireAuth, requireRole('superadmin'), async (_req, res) => res.json(await prisma.user.findMany({ select: { ...publicUserSelect, email: true } })));
+  app.get('/api/users', requireAuth, requireRole('superadmin'), async (_req, res) => {
+    res.json(await listUsers());
+  });
   app.patch('/api/users/:id/role', requireAuth, requireRole('superadmin'), async (req, res) => {
-    const id = parseId(req.params.id);
-    if (!id || !ROLES.includes(req.body?.role)) fail(400, 'Rol inválido');
-    if (id === req.userId && req.body.role !== 'superadmin') fail(400, 'No podés quitarte tu propio acceso de administración');
-    res.json(await prisma.user.update({ where: { id: id! }, data: { role: req.body.role }, select: { ...publicUserSelect, email: true } }));
+    res.json(await updateUserRole(req.userId!, parseId(req.params.id), req.body?.role));
   });
-  app.get('/api/users/me', requireAuth, async (req, res) => res.json(await publicProfile(req.userId!, req.userId)));
-  app.get('/api/users/:id', optionalAuth, async (req, res) => res.json(await publicProfile(parseId(req.params.id) ?? 0, req.userId)));
-
-  app.get('/api/users/:id/reviews', optionalAuth, async (req, res) => res.json(await listReviews({ authorId: parseId(req.params.id) ?? 0 }, req.userId)));
-  app.get('/api/users/:id/reposts', optionalAuth, async (req, res) => res.json(await userReposts(parseId(req.params.id) ?? 0, req.userId)));
+  app.get('/api/users/me', requireAuth, async (req, res) => {
+    res.json(await getPublicProfile(req.userId!, req.userId));
+  });
+  app.get('/api/users/:id', optionalAuth, async (req, res) => {
+    res.json(await getPublicProfile(parseId(req.params.id) ?? 0, req.userId));
+  });
+  app.get('/api/users/:id/reviews', optionalAuth, async (req, res) => {
+    res.json(await listReviews({ authorId: parseId(req.params.id) ?? 0 }, req.userId));
+  });
+  app.get('/api/users/:id/reposts', optionalAuth, async (req, res) => {
+    res.json(await getUserReposts(parseId(req.params.id) ?? 0, req.userId));
+  });
 }

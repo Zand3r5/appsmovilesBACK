@@ -15,26 +15,22 @@ import { rewardRoutes } from './routes/rewards';
 import { adminRoutes } from './routes/admin';
 import { walletRoutes } from './routes/wallet';
 import { uploadRoutes } from './routes/uploads';
-import { pushRoutes } from './routes/push';
-import { reminderRoutes } from './routes/reminders';
 import { cinemaRoutes } from './routes/cinemas';
 import { errorHandler } from './middlewares/errors';
 export function createApp() {
   validateConfig();
   const app = express();
-  if (process.env.NODE_ENV === 'production') app.set('trust proxy', 1);
   app.use(helmet());
   app.use(cors({ origin: process.env.CORS_ORIGINS?.split(',') ?? true }));
   app.use(rateLimit({ windowMs: 60000, limit: 300, message: { error: 'Demasiadas solicitudes' } }));
   app.use(express.json({ limit: '5mb' }));
   app.get('/api/health', async (_req, res) => {
-    await prisma.$queryRaw`SELECT 1`;
     const sync = await prisma.syncRun.findFirst({ where: { status: 'success' }, orderBy: { id: 'desc' }, select: { finishedAt: true } });
     res.json({ ok: true, catalogLastSyncedAt: sync?.finishedAt ?? null });
   });
   authRoutes(app); movieRoutes(app); releaseRoutes(app); reviewRoutes(app);
   userRoutes(app); socialRoutes(app); rewardRoutes(app); adminRoutes(app);
-  reminderRoutes(app); cinemaRoutes(app); pushRoutes(app); uploadRoutes(app); walletRoutes(app);
+  cinemaRoutes(app); uploadRoutes(app); walletRoutes(app);
   app.use((_req, res) => res.status(404).json({ error: 'Ruta inexistente' }));
   app.use(errorHandler);
   return app;

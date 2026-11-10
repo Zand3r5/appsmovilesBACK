@@ -1,6 +1,6 @@
 import { prisma } from '../prisma';
 import { fail } from '../utils/http';
-import { getRewardsInTransaction, syncAchievementsInTransaction } from './gamification';
+import { buildRewardsSnapshot } from './gamification';
 import { recordPoints, withUserPoints } from './points';
 
 function redemptionStatus(row: { status: string; expiresAt: Date }) {
@@ -23,14 +23,13 @@ async function reverseRedemption(id: number, actorId: number, ownerOnly: boolean
   if (!owner) fail(404, 'Canje no encontrado');
   return withUserPoints(owner.userId, async tx => {
    
-    await syncAchievementsInTransaction(owner.userId, tx);
     const row = await tx.redemption.findUniqueOrThrow({ where: { id } });
     const debit = await tx.pointEntry.findUnique({ where: { userId_key: { userId: row.userId, key: `redemption:${id}` } } });
     const credit = await tx.pointEntry.findUnique({ where: { userId_key: { userId: row.userId, key: `refund:${id}` } } });
     if (!debit || debit.kind !== 'redemption' || debit.amount !== -row.cost || row.cost <= 0) fail(409, 'No se pudo verificar el débito original. Contactá al administrador.');
     if (ownerOnly && row.status === 'canceled' && !row.usedAt && row.refundedAt && credit?.kind === 'refund' && credit.amount === row.cost) {
       
-      return { canceled: true, alreadyCanceled: true, rewards: await getRewardsInTransaction(row.userId, tx) };
+      return { canceled: true, alreadyCanceled: true, rewards: await buildRewardsSnapshot(row.userId, tx) };
     }
     if (credit) fail(409, 'Este canje ya tiene un reintegro registrado');
     const changed = await tx.redemption.updateMany({
@@ -41,7 +40,7 @@ async function reverseRedemption(id: number, actorId: number, ownerOnly: boolean
     
     const reward = await tx.reward.findUnique({ where: { id: row.rewardId } });
     await recordPoints(tx, row.userId, `refund:${id}`, 'refund', row.cost, `${ownerOnly ? 'Anulación' : 'Reintegro'}: ${reward?.title ?? row.rewardId}`);
-    return ownerOnly ? { canceled: true, alreadyCanceled: false, rewards: await getRewardsInTransaction(row.userId, tx) } : { refunded: true };
+    return ownerOnly ? { canceled: true, alreadyCanceled: false, rewards: await buildRewardsSnapshot(row.userId, tx) } : { refunded: true };
   });
 }
 export async function refundRedemption(id: number, actorId: number) {

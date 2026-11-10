@@ -67,9 +67,9 @@ function toMovieDTO(movie: MovieRecord, stats?: MovieStats, friendsRating?: Frie
   };
 }
 
-async function toMovieListDTO(movies: MovieRecord[], userId?: number) {
+async function toMovieListDTO(movies: MovieRecord[], userId?: number, friendIds?: number[]) {
   const ids = movies.map((m) => m.id);
-  const [stats, friends] = await Promise.all([getMovieStats(ids), getFriendsRatings(userId, ids)]);
+  const [stats, friends] = await Promise.all([getMovieStats(ids), getFriendsRatings(userId, ids, friendIds)]);
   return movies.map((m) => toMovieDTO(m, stats.get(m.id), friends.get(m.id)));
 }
 
@@ -95,9 +95,11 @@ export async function getMovieHome(userId?: number) {
 }
 
 export async function getMovieDetail(id: number, userId?: number) {
-  const movie = await requireSavedMovie(id);
-  const [dto] = await toMovieListDTO([movie], userId);
-  const friendIds = userId ? await getFriendIds(userId) : [];
+  const [movie, friendIds] = await Promise.all([
+    requireSavedMovie(id),
+    userId ? getFriendIds(userId) : Promise.resolve([]),
+  ]);
+  const [dto] = await toMovieListDTO([movie], userId, friendIds);
   const reviews = friendIds.length ? await prisma.review.findMany({
     where: { movieId: id, authorId: { in: friendIds } }, take: 5, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
     select: { rating: true, author: { select: publicUserSelect } },

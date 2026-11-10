@@ -1,11 +1,11 @@
 import bcrypt from 'bcrypt';
 import { prisma } from '../prisma';
-import { isStrongPassword } from '../utils/validation';
+import { isBcryptPassword, isStrongPassword } from '../utils/validation';
 import { fail } from '../utils/http';
 
 export async function changePassword(userId: number, sessionId: string, currentPassword: unknown, newPassword: unknown) {
-  if (typeof currentPassword !== 'string' || !currentPassword || currentPassword.length > 72) fail(400, 'Ingresá tu contraseña actual');
-  if (!isStrongPassword(newPassword) || Buffer.byteLength(newPassword as string, 'utf8') > 72) {
+  if (!isBcryptPassword(currentPassword) || !currentPassword) fail(400, 'Ingresá tu contraseña actual');
+  if (!isStrongPassword(newPassword)) {
     fail(400, 'Elegí una contraseña de 8 a 72 caracteres, con letras y números. Si usás símbolos especiales, elegí una más corta.');
   }
   const user = await prisma.user.findUniqueOrThrow({ where: { id: userId }, select: { passwordHash: true } });
