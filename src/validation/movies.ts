@@ -33,7 +33,7 @@ export function movieSearchQuery(value: unknown) {
   return value.trim();
 }
 
-export function movieId(value: unknown) {
+export function requireId(value: unknown) {
   const id = parseId(value);
   if (!id) fail(400, 'El id no es válido');
   return id;

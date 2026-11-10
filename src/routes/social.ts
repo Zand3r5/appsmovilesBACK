@@ -3,14 +3,12 @@ import { requireAuth } from '../middlewares/auth';
 import {
   getFriends,
   getFriendshipStatus,
-  getNotifications,
   getPendingFriendRequests,
-  markAllNotificationsRead,
-  markNotificationRead,
   removeFriendship,
   respondToFriendRequest,
   sendFriendRequest,
 } from '../services/social';
+import { getNotifications, markAllNotificationsRead, markNotificationRead } from '../services/notifications';
 
 export function socialRoutes(app: Express) {
   app.get('/api/friendships/status/:userId', requireAuth, async (req, res) => {

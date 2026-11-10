@@ -3,7 +3,7 @@ import { prisma } from '../prisma';
 
 export async function withUserPoints<T>(userId: number, work: (tx: Prisma.TransactionClient) => Promise<T>) {
   return prisma.$transaction(async tx => {
-    
+    // Esto no es al pedo, crea el lock para que no se puedan hacer dos transacciones concurrentes del mismo usuario.
     await tx.user.update({ where: { id: userId }, data: { id: userId } });
     return work(tx);
   });

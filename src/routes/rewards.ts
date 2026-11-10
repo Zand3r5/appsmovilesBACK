@@ -2,19 +2,19 @@ import type { Express } from 'express';
 import { requireAuth, requireRole } from '../middlewares/auth';
 import { getAchievements, getPoints, getRewards, redeemReward } from '../services/gamification';
 import { validateRedemption, useRedemption, refundRedemption, cancelRedemption } from '../services/fulfillment';
-import { movieId } from '../validation/movies';
+import { requireId } from '../validation/movies';
 
 export function rewardRoutes(app: Express) {
   app.post('/api/admin/redemptions/validate', requireAuth, requireRole('moderator', 'superadmin'), async (req, res) => res.json(await validateRedemption(req.body?.code)));
   app.post('/api/admin/redemptions/use', requireAuth, requireRole('moderator', 'superadmin'), async (req, res) => res.json(await useRedemption(req.body?.code, req.userId!)));
-  app.post('/api/admin/redemptions/:id/refund', requireAuth, requireRole('superadmin'), async (req, res) => res.json(await refundRedemption(movieId(req.params.id), req.userId!)));
+  app.post('/api/admin/redemptions/:id/refund', requireAuth, requireRole('superadmin'), async (req, res) => res.json(await refundRedemption(requireId(req.params.id), req.userId!)));
 
   app.delete('/api/rewards/redemptions/:id', requireAuth, async (req, res) => {
-    res.json(await cancelRedemption(movieId(req.params.id), req.userId!));
+    res.json(await cancelRedemption(requireId(req.params.id), req.userId!));
   });
 
   app.get('/api/points', requireAuth, async (req, res) => {
-    const before = req.query.before === undefined ? undefined : movieId(req.query.before);
+    const before = req.query.before === undefined ? undefined : requireId(req.query.before);
     res.json(await getPoints(req.userId!, before));
   });
 
