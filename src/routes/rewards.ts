@@ -2,7 +2,7 @@ import type { Express } from 'express';
 import { requireAuth, requireRole } from '../middlewares/auth';
 import { getAchievements, getPoints, getRewards, redeemReward } from '../services/gamification';
 import { validateRedemption, useRedemption, refundRedemption, cancelRedemption } from '../services/fulfillment';
-import { requireId } from '../validation/movies';
+import { requireId } from '../utils/validation';
 
 export function rewardRoutes(app: Express) {
   app.post('/api/admin/redemptions/validate', requireAuth, requireRole('moderator', 'superadmin'), async (req, res) => res.json(await validateRedemption(req.body?.code)));

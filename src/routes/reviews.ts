@@ -9,15 +9,15 @@ import {
   toggleReviewReaction,
   updateReview,
 } from '../services/reviews';
-import { parseId } from '../utils/validation';
+import { requireId } from '../utils/validation';
 
 export function reviewRoutes(app: Express) {
   app.get('/api/movies/:id/reviews', optionalAuth, async (req, res) => {
-    res.json(await listReviews({ movieId: parseId(req.params.id) ?? 0 }, req.userId));
+    res.json(await listReviews({ movieId: requireId(req.params.id) }, req.userId));
   });
   app.post('/api/movies/:id/reviews', requireAuth, async (req, res) => {
     try {
-      res.status(201).json(await createReview(req.userId!, req.params.id, req.body));
+      res.status(201).json(await createReview(req.userId!, requireId(req.params.id), req.body));
     } catch (error: any) {
       if (error.code === 'P2002') return res.status(409).json({
         error: 'Ya reseñaste esta película. Podés editar tu reseña existente.',
@@ -27,15 +27,15 @@ export function reviewRoutes(app: Express) {
     }
   });
   app.patch('/api/reviews/:id', requireAuth, async (req, res) => {
-    res.json(await updateReview(req.userId!, req.params.id, req.body));
+    res.json(await updateReview(req.userId!, requireId(req.params.id), req.body));
   });
   app.delete('/api/reviews/:id', requireAuth, async (req, res) => {
-    await deleteReview(req.userId!, req.userRole!, req.params.id);
+    await deleteReview(req.userId!, req.userRole!, requireId(req.params.id));
     res.status(204).end();
   });
   for (const kind of ['like', 'repost'] as const) {
     app.post(`/api/reviews/:id/${kind}`, requireAuth, async (req, res) => {
-      res.json(await toggleReviewReaction(req.userId!, req.params.id, kind));
+      res.json(await toggleReviewReaction(req.userId!, requireId(req.params.id), kind));
     });
   }
   app.get('/api/feed/popular', optionalAuth, async (req, res) => {

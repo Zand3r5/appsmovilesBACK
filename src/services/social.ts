@@ -1,7 +1,6 @@
 import { prisma } from "../prisma";
-import { publicUserSelect } from '../middlewares/auth';
+import { publicUserSelect } from './userShapes';
 import { fail } from '../utils/http';
-import { parseId } from '../utils/validation';
 import { createNotification } from './notifications';
 
 const friendshipInclude = {
@@ -36,8 +35,7 @@ export async function getFriendsRatings(userId: number | undefined, movieIds: nu
   return result;
 }
 
-export async function getFriendshipStatus(userId: number, otherValue: unknown) {
-  const otherId = parseId(otherValue) ?? 0;
+export async function getFriendshipStatus(userId: number, otherId: number) {
   const friendship = await prisma.friendship.findUnique({
     where: { userLowId_userHighId: { userLowId: Math.min(userId, otherId), userHighId: Math.max(userId, otherId) } },
   });
@@ -48,9 +46,8 @@ export async function getFriendshipStatus(userId: number, otherValue: unknown) {
   };
 }
 
-export async function sendFriendRequest(userId: number, otherValue: unknown) {
-  const otherId = parseId(otherValue);
-  if (!otherId || otherId === userId) fail(400, 'Elegí otro usuario');
+export async function sendFriendRequest(userId: number, otherId: number) {
+  if (otherId === userId) fail(400, 'Elegí otro usuario');
   if (!await prisma.user.findUnique({ where: { id: otherId } })) fail(404, 'Usuario no encontrado');
   return prisma.$transaction(async tx => {
     const friendship = await tx.friendship.create({
@@ -71,10 +68,10 @@ export async function sendFriendRequest(userId: number, otherValue: unknown) {
   });
 }
 
-export async function respondToFriendRequest(userId: number, requestValue: unknown, accept: unknown) {
+export async function respondToFriendRequest(userId: number, requestId: number, accept: unknown) {
   if (typeof accept !== 'boolean') fail(400, 'Indicá si aceptás la solicitud');
   await prisma.$transaction(async tx => {
-    const friendship = await tx.friendship.findUnique({ where: { id: parseId(requestValue) ?? 0 } });
+    const friendship = await tx.friendship.findUnique({ where: { id: requestId } });
     if (!friendship || friendship.status !== 'pending') fail(404, 'La solicitud ya no existe');
     if (friendship.addresseeId !== userId) fail(403, 'No tenés permiso');
     await tx.notification.updateMany({ where: { friendshipId: friendship.id, recipientId: userId }, data: { read: true } });
@@ -86,9 +83,9 @@ export async function respondToFriendRequest(userId: number, requestValue: unkno
   });
 }
 
-export async function removeFriendship(userId: number, requestValue: unknown) {
+export async function removeFriendship(userId: number, requestId: number) {
   await prisma.$transaction(async tx => {
-    const friendship = await tx.friendship.findUnique({ where: { id: parseId(requestValue) ?? 0 } });
+    const friendship = await tx.friendship.findUnique({ where: { id: requestId } });
     if (!friendship) fail(404, 'Amistad no encontrada');
     if (friendship.requesterId !== userId && friendship.addresseeId !== userId) fail(403, 'No tenés permiso');
     await tx.notification.deleteMany({ where: { friendshipId: friendship.id } });

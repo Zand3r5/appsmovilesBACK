@@ -1,7 +1,8 @@
 import type { Express } from 'express';
 import { optionalAuth } from '../middlewares/auth';
 import { getMovieCatalog, getMovieHome, getMovieDetail, getMovieRecommendations } from '../services/movies';
-import { movieSearchQuery, requireId } from '../validation/movies';
+import { movieSearchQuery } from '../validation/movies';
+import { requireId } from '../utils/validation';
 
 export function movieRoutes(app: Express) {
   app.get('/api/movies', optionalAuth, async (req, res) => res.json(await getMovieCatalog(req.userId)));

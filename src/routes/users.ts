@@ -8,7 +8,7 @@ import {
   updateCurrentUser,
   updateUserRole,
 } from '../services/users';
-import { parseId } from '../utils/validation';
+import { requireId } from '../utils/validation';
 
 export function userRoutes(app: Express) {
   app.patch('/api/users/me', requireAuth, async (req, res) => {
@@ -18,18 +18,18 @@ export function userRoutes(app: Express) {
     res.json(await listUsers());
   });
   app.patch('/api/users/:id/role', requireAuth, requireRole('superadmin'), async (req, res) => {
-    res.json(await updateUserRole(req.userId!, parseId(req.params.id), req.body?.role));
+    res.json(await updateUserRole(req.userId!, requireId(req.params.id), req.body?.role));
   });
   app.get('/api/users/me', requireAuth, async (req, res) => {
     res.json(await getPublicProfile(req.userId!, req.userId));
   });
   app.get('/api/users/:id', optionalAuth, async (req, res) => {
-    res.json(await getPublicProfile(parseId(req.params.id) ?? 0, req.userId));
+    res.json(await getPublicProfile(requireId(req.params.id), req.userId));
   });
   app.get('/api/users/:id/reviews', optionalAuth, async (req, res) => {
-    res.json(await listReviews({ authorId: parseId(req.params.id) ?? 0 }, req.userId));
+    res.json(await listReviews({ authorId: requireId(req.params.id) }, req.userId));
   });
   app.get('/api/users/:id/reposts', optionalAuth, async (req, res) => {
-    res.json(await getUserReposts(parseId(req.params.id) ?? 0, req.userId));
+    res.json(await getUserReposts(requireId(req.params.id), req.userId));
   });
 }

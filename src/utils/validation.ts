@@ -1,6 +1,14 @@
+import { fail } from './http';
+
 export function parseId(value: unknown){
     const id= Number(value);
     return Number.isInteger(id) && id > 0 ? id : null;
+}
+
+export function requireId(value: unknown) {
+  const id = parseId(value);
+  if (!id) fail(400, 'El id no es válido');
+  return id;
 }
 
 export function cleanText(value: unknown, max: number){
@@ -24,8 +32,8 @@ export function isStrongPassword(value: unknown): value is string {
     && /[A-Za-z]/.test(value) && /\d/.test(value);
 }
 
-export function isRating(value: unknown) {
-  return typeof value === "number" && value >= 0 && value <= 5 && Number.isInteger(value * 2);
+export function isPhoto(value: unknown) {
+  if (value === undefined || value === null) return true;
+  return typeof value === "string" && value.length <= 2_000_000
+    && (/^data:image\/(jpeg|jpg|png|webp);base64,/.test(value) || /^\/media\/[0-9a-f-]{36}\.webp$/.test(value) || /^https?:\/\/[^/]+\/media\/[0-9a-f-]{36}\.webp$/.test(value));
 }
-
-export const ROLES = ["user", "moderator", "superadmin"];

@@ -1,15 +1,14 @@
 import type { Prisma } from '@prisma/client';
 import { prisma } from "../prisma";
 import { getFriendsRatings, getFriendIds } from "./social";
-import { publicUserSelect } from '../middlewares/auth';
+import { publicUserSelect } from './userShapes';
 import { fail } from '../utils/http';
 import { imageReference } from './uploads';
-import { validateMovieInput, type MovieInput } from '../validation/movies';
+import { parseMovieMetadata, validateMovieUpdate, validateNewMovie, type MovieInput, type MovieMetadata } from '../validation/movies';
 
 type MovieRecord = Prisma.MovieGetPayload<{ include: { genres: true } }>;
 type MovieStats = { communityRating: number | null; commentsCount: number; ratingsCount: number; reviewsLast30Days: number };
 type FriendsRating = { rating: number; count: number };
-type MovieMetadata = Pick<MovieInput, 'actors' | 'directors' | 'crew' | 'trailers' | 'watchProviders'>;
 
 const IMG = "https://image.tmdb.org/t/p/";
 
@@ -41,7 +40,7 @@ async function getMovieStats(movieIds: number[]) {
 
 // La película con la forma que hoy usa la app
 function toMovieDTO(movie: MovieRecord, stats?: MovieStats, friendsRating?: FriendsRating) {
-  const meta = JSON.parse(movie.metadata || "{}") as Partial<MovieMetadata>;
+  const meta = parseMovieMetadata(movie.metadata);
   return {
     id: movie.id,
     tmdbId: movie.tmdbId,
@@ -52,11 +51,11 @@ function toMovieDTO(movie: MovieRecord, stats?: MovieStats, friendsRating?: Frie
     genres: (movie.genres ?? []).map(g => g.name),
     posterUrl: movie.posterPath ? (movie.posterPath.startsWith("/") && !movie.posterPath.startsWith("/media/") ? `${IMG}w500${movie.posterPath}` : movie.posterPath) : null,
     backdropUrl: movie.backdropPath ? (movie.backdropPath.startsWith("/") && !movie.backdropPath.startsWith("/media/") ? `${IMG}w1280${movie.backdropPath}` : movie.backdropPath) : null,
-    actors: meta.actors ?? [],
-    directors: meta.directors ?? [],
-    crew: meta.crew ?? [],
-    trailers: meta.trailers ?? [],
-    watchProviders: meta.watchProviders ?? { AR: { stream: [], rent: [], buy: [] } },
+    actors: meta.actors,
+    directors: meta.directors,
+    crew: meta.crew,
+    trailers: meta.trailers,
+    watchProviders: meta.watchProviders,
     featured: movie.featured,
     hidden: movie.hidden,
     communityRating: stats?.communityRating ?? null,
@@ -123,36 +122,54 @@ export async function getMovieRecommendations(id: number, userId?: number) {
   return (await toMovieListDTO(candidates, userId)).sort(compareMovieRatings).slice(0, 6);
 }
 
-export async function saveMovie(body: unknown, userId: number, id?: number) {
-  const input = validateMovieInput(body, id !== undefined);
+async function genreConnections(tx: Prisma.TransactionClient, names: string[]) {
+  const connections: { id: number }[] = [];
+  for (const name of new Set(names)) {
+    const genre = await tx.genre.upsert({ where: { name }, create: { name }, update: {} });
+    connections.push({ id: genre.id });
+  }
+  return connections;
+}
+
+function mergedMetadata(input: Partial<MovieInput>, previous: MovieMetadata = parseMovieMetadata(undefined)) {
+  return JSON.stringify({
+    actors: input.actors ?? previous.actors,
+    directors: input.directors ?? previous.directors,
+    crew: input.crew ?? previous.crew,
+    trailers: input.trailers ?? previous.trailers,
+    watchProviders: input.watchProviders ?? previous.watchProviders,
+  } satisfies MovieMetadata);
+}
+
+export async function createMovie(body: unknown, userId: number) {
+  const input = validateNewMovie(body);
+  input.posterUrl = (await imageReference(input.posterUrl, userId, true)) ?? null;
+  if (input.backdropUrl !== undefined) input.backdropUrl = await imageReference(input.backdropUrl, userId, true);
+  const movie = await prisma.$transaction(async tx => {
+    const genres = await genreConnections(tx, input.genres);
+    return tx.movie.create({ data: {
+      tmdbId: input.tmdbId, title: input.title, overview: input.overview, releaseDate: input.releaseDate,
+      runtime: input.runtime, posterPath: input.posterUrl, backdropPath: input.backdropUrl, featured: input.featured,
+      metadata: mergedMetadata(input), genres: { connect: genres },
+    }, include: { genres: true } });
+  });
+  const [dto] = await toMovieListDTO([movie], userId);
+  return dto;
+}
+
+export async function updateMovie(id: number, body: unknown, userId: number) {
+  const input = validateMovieUpdate(body);
   if (input.posterUrl !== undefined) input.posterUrl = await imageReference(input.posterUrl, userId, true);
   if (input.backdropUrl !== undefined) input.backdropUrl = await imageReference(input.backdropUrl, userId, true);
   const movie = await prisma.$transaction(async tx => {
-    const current = id === undefined ? null : await tx.movie.findUnique({ where: { id } });
-    if (id !== undefined && !current) fail(404, 'Película no encontrada');
-    const genreIds: number[] = [];
-    for (const name of [...new Set(input.genres ?? [])]) {
-      let genre = await tx.genre.findFirst({ where: { name } });
-      if (!genre) {
-        const min = await tx.genre.aggregate({ _min: { id: true } });
-        genre = await tx.genre.create({ data: { id: Math.min(0, min._min.id ?? 0) - 1, name } });
-      }
-      genreIds.push(genre.id);
-    }
-    const metadata = JSON.parse(current?.metadata || '{}');
-    for (const key of ['actors', 'directors', 'crew', 'trailers', 'watchProviders'] as const) {
-      if (input[key] !== undefined) metadata[key] = input[key];
-    }
-    const data = {
+    const current = await tx.movie.findUnique({ where: { id } });
+    if (!current) fail(404, 'Película no encontrada');
+    const genres = input.genres === undefined ? undefined : await genreConnections(tx, input.genres);
+    return tx.movie.update({ where: { id }, data: {
       tmdbId: input.tmdbId, title: input.title, overview: input.overview, releaseDate: input.releaseDate,
       runtime: input.runtime, posterPath: input.posterUrl, backdropPath: input.backdropUrl, featured: input.featured,
-      metadata: JSON.stringify(metadata),
-    };
-    if (id === undefined) return tx.movie.create({ data: {
-      ...data, title: input.title!, overview: input.overview!, genres: { connect: genreIds.map(id => ({ id })) },
-    }, include: { genres: true } });
-    return tx.movie.update({ where: { id }, data: {
-      ...data, ...(input.genres !== undefined ? { genres: { set: genreIds.map(id => ({ id })) } } : {}),
+      metadata: mergedMetadata(input, parseMovieMetadata(current.metadata)),
+      ...(genres ? { genres: { set: genres } } : {}),
     }, include: { genres: true } });
   });
   const [dto] = await toMovieListDTO([movie], userId);
@@ -174,5 +191,5 @@ export async function getMovieReleases(kind: 'upcoming' | 'now_playing', userId?
   });
   if (kind === 'upcoming') entries.sort((a, b) => a.movie.releaseDate!.localeCompare(b.movie.releaseDate!) || a.position - b.position);
   const movies = await toMovieListDTO(entries.map(e => e.movie), userId);
-  return movies.map((movie, i) => ({ ...movie, rating: entries[i].tmdbRating === null ? '-' : Math.round(entries[i].tmdbRating! * 10) / 10 }));
+  return movies.map((movie, i) => ({ ...movie, rating: entries[i].tmdbRating === null ? null : Math.round(entries[i].tmdbRating! * 10) / 10 }));
 }

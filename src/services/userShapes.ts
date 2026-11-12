@@ -1,0 +1,1 @@
+export const publicUserSelect = { id: true, name: true, role: true } as const;

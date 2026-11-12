@@ -1,13 +1,7 @@
 import type { NextFunction, Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
-import { randomUUID } from 'node:crypto';
 import { prisma } from '../prisma';
 
-export async function createSession(userId: number) {
-  const id = randomUUID();
-  await prisma.session.create({ data: { id, userId, expiresAt: new Date(Date.now() + 7 * 86400000) } });
-  return jwt.sign({ sub: String(userId), sid: id }, process.env.JWT_SECRET!, { expiresIn: '7d', algorithm: 'HS256' });
-}
 async function readSession(req: Request) {
   const header = req.headers.authorization;
   if (!header?.startsWith('Bearer ')) return null;
@@ -44,12 +38,4 @@ export function requireRole(...roles: string[]) {
     if (!req.userRole || !roles.includes(req.userRole)) return res.status(403).json({ error: 'No tenés permiso' });
     next();
   };
-}
-export const publicUserSelect = { id: true, name: true, role: true } as const;
-export async function sessionUser(id: number) {
-  const user = await prisma.user.findUniqueOrThrow({ where: { id }, select: {
-    id: true, name: true, email: true, role: true,
-    likes: { select: { reviewId: true } }, reposts: { select: { reviewId: true } },
-  } });
-  return { ...user, likes: user.likes.map(x => x.reviewId), reposts: user.reposts.map(x => x.reviewId) };
 }

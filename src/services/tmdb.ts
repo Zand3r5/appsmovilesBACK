@@ -1,11 +1,63 @@
-import { randomUUID } from 'node:crypto';
+import { z } from 'zod';
 import { prisma } from '../prisma';
+import { movieMetadataSchema } from '../validation/movies';
 
 const BASE = 'https://api.themoviedb.org/3';
 const CREW_JOBS = ['Screenplay', 'Director of Photography', 'Original Music Composer', 'Editor', 'Producer'];
 const FESTIVAL = /fest|bafici|ficuba|mar del plata/i;
 
-async function tmdb(path: string): Promise<any> {
+const tmdbListMovieSchema = z.object({
+  id: z.number().int().positive(),
+  vote_average: z.number().nullable().optional(),
+});
+
+const tmdbListSchema = z.object({
+  total_pages: z.number().int().nonnegative(),
+  results: z.array(tmdbListMovieSchema),
+});
+
+const providerSchema = z.object({ provider_name: z.string() });
+const tmdbMovieSchema = z.object({
+  id: z.number().int().positive(),
+  title: z.string().min(1),
+  overview: z.string().nullable().optional(),
+  release_date: z.string().nullable().optional(),
+  runtime: z.number().int().nonnegative().nullable().optional(),
+  poster_path: z.string().nullable().optional(),
+  backdrop_path: z.string().nullable().optional(),
+  genres: z.array(z.object({ id: z.number().int(), name: z.string() })),
+  credits: z.object({
+    cast: z.array(z.object({ name: z.string(), character: z.string().nullable().optional() })),
+    crew: z.array(z.object({ name: z.string(), job: z.string() })),
+  }).optional(),
+  videos: z.object({
+    results: z.array(z.object({ name: z.string(), site: z.string(), type: z.string(), key: z.string() })),
+  }).optional(),
+  'watch/providers': z.object({
+    results: z.object({
+      AR: z.object({
+        flatrate: z.array(providerSchema).optional(),
+        rent: z.array(providerSchema).optional(),
+        buy: z.array(providerSchema).optional(),
+      }).optional(),
+    }),
+  }).optional(),
+  release_dates: z.object({
+    results: z.array(z.object({
+      iso_3166_1: z.string(),
+      release_dates: z.array(z.object({
+        type: z.number().int(),
+        note: z.string().nullable().optional(),
+        release_date: z.string(),
+      })),
+    })),
+  }).optional(),
+});
+
+type TmdbListMovie = z.infer<typeof tmdbListMovieSchema>;
+type TmdbProvider = z.infer<typeof providerSchema>;
+
+async function tmdb<T>(path: string, schema: z.ZodType<T>): Promise<T> {
   if (!process.env.TMDB_KEY) throw new Error('Falta TMDB_KEY en backend/.env');
   const url = new URL(`${process.env.TMDB_BASE_URL ?? BASE}${path}`);
   url.searchParams.set('api_key', process.env.TMDB_KEY);
@@ -21,94 +73,134 @@ async function tmdb(path: string): Promise<any> {
         }
         throw new Error(`TMDB respondió ${response.status} para ${url.pathname}`);
       }
-      return await response.json();
+      const parsed = schema.safeParse(await response.json());
+      if (!parsed.success) throw new Error(`TMDB respondió datos inválidos para ${url.pathname}`);
+      return parsed.data;
     } catch (e) {
       if (attempt === 2 || (e instanceof Error && e.message.startsWith('TMDB respondió'))) throw e;
       await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1)));
     }
   }
+  throw new Error('TMDB no respondió');
 }
-const names = (list: any[] = []) => list.map(p => p.provider_name);
+const names = (list: TmdbProvider[] = []) => list.map(provider => provider.provider_name);
+
+async function saveTmdbGenres(genres: { id: number; name: string }[]) {
+  const connections: { id: number }[] = [];
+  for (const incoming of genres) {
+    const byTmdbId = await prisma.genre.findUnique({ where: { tmdbId: incoming.id } });
+    const genre = byTmdbId
+      ? await prisma.genre.update({ where: { id: byTmdbId.id }, data: { name: incoming.name } })
+      : await prisma.genre.upsert({
+          where: { name: incoming.name },
+          create: { tmdbId: incoming.id, name: incoming.name },
+          update: { tmdbId: incoming.id },
+        });
+    connections.push({ id: genre.id });
+  }
+  return connections;
+}
+
 async function importMovieFromTmdb(tmdbId: number, upcoming = false) {
-  const m = await tmdb(`/movie/${tmdbId}?append_to_response=credits,videos,watch/providers,release_dates`);
+  const m = await tmdb(`/movie/${tmdbId}?append_to_response=credits,videos,watch/providers,release_dates`, tmdbMovieSchema);
   const ar = m['watch/providers']?.results?.AR ?? {};
-  const arReleases = m.release_dates?.results?.find((r: any) => r.iso_3166_1 === 'AR')?.release_dates ?? [];
+  const arReleases = m.release_dates?.results.find(result => result.iso_3166_1 === 'AR')?.release_dates ?? [];
   const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Argentina/Buenos_Aires', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
   const theatricalDates: string[] = arReleases
-    .filter((r: any) => [2, 3].includes(r.type) && !FESTIVAL.test(r.note ?? ''))
-    .map((r: any) => String(r.release_date).slice(0, 10)).sort();
+    .filter(release => [2, 3].includes(release.type) && !FESTIVAL.test(release.note ?? ''))
+    .map(release => release.release_date.slice(0, 10)).sort();
   // Upcoming discovery includes re-releases: keep the relevant future Argentine
   // date rather than filtering the movie out because of its original premiere.
   const localRelease = (upcoming ? theatricalDates.find(date => date > today) : undefined) ?? theatricalDates[0];
   const lastCinemaRelease: string | null = arReleases
-    .filter((r: any) => [2, 3].includes(r.type) && !FESTIVAL.test(r.note ?? ''))
-    .map((r: any) => String(r.release_date).slice(0, 10)).filter((d: string) => d <= today).sort().pop() ?? null;
-  const metadata = JSON.stringify({
-    actors: (m.credits?.cast ?? []).slice(0, 8).map((c: any) => ({ name: c.name, character: c.character })),
-    directors: (m.credits?.crew ?? []).filter((c: any) => c.job === 'Director').map((c: any) => c.name),
-    crew: (m.credits?.crew ?? []).filter((c: any) => CREW_JOBS.includes(c.job)).slice(0, 6).map((c: any) => ({ name: c.name, job: c.job })),
-    trailers: (m.videos?.results ?? []).filter((v: any) => v.site === 'YouTube' && v.type === 'Trailer').slice(0, 3).map((v: any) => ({ name: v.name, site: 'YouTube', key: v.key })),
+    .filter(release => [2, 3].includes(release.type) && !FESTIVAL.test(release.note ?? ''))
+    .map(release => release.release_date.slice(0, 10)).filter(date => date <= today).sort().pop() ?? null;
+  const metadata = JSON.stringify(movieMetadataSchema.parse({
+    actors: (m.credits?.cast ?? []).slice(0, 8).map(actor => ({ name: actor.name, character: actor.character ?? '' })),
+    directors: (m.credits?.crew ?? []).filter(member => member.job === 'Director').map(member => member.name),
+    crew: (m.credits?.crew ?? []).filter(member => CREW_JOBS.includes(member.job)).slice(0, 6).map(member => ({ name: member.name, job: member.job })),
+    trailers: (m.videos?.results ?? []).filter(video => video.site === 'YouTube' && video.type === 'Trailer').slice(0, 3).map(video => ({ name: video.name, site: 'YouTube', key: video.key })),
     watchProviders: { AR: { stream: names(ar.flatrate), rent: names(ar.rent), buy: names(ar.buy) } },
-  });
+  }));
   const data = { title: m.title, overview: m.overview || '', releaseDate: localRelease || m.release_date || null,
     runtime: m.runtime || null, posterPath: m.poster_path, backdropPath: m.backdrop_path, metadata, syncedAt: new Date() };
-  const genres = m.genres.map((g: any) => ({ where: { id: g.id }, create: { id: g.id, name: g.name } }));
-  const movie = await prisma.movie.upsert({ where: { tmdbId: m.id }, create: { tmdbId: m.id, ...data, genres: { connectOrCreate: genres } },
-    update: { ...data, genres: { set: [], connectOrCreate: genres } }, include: { genres: true } });
+  const genres = await saveTmdbGenres(m.genres);
+  const movie = await prisma.movie.upsert({ where: { tmdbId: m.id }, create: { tmdbId: m.id, ...data, genres: { connect: genres } },
+    update: { ...data, genres: { set: genres } }, include: { genres: true } });
   return Object.assign(movie, { lastCinemaRelease });
 }
 async function loadList(path: string) {
-  const first = await tmdb(`${path}${path.includes('?') ? '&' : '?'}page=1`);
+  const first = await tmdb(`${path}${path.includes('?') ? '&' : '?'}page=1`, tmdbListSchema);
   const maxPages = Number(process.env.TMDB_SYNC_MAX_PAGES ?? 5);
   if (!Number.isInteger(maxPages) || maxPages < 1 || maxPages > 500) throw new Error('TMDB_SYNC_MAX_PAGES debe estar entre 1 y 500');
   const rows = [...first.results];
-  for (let page = 2; page <= Math.min(first.total_pages, maxPages); page++) rows.push(...(await tmdb(`${path}${path.includes('?') ? '&' : '?'}page=${page}`)).results);
-  return [...new Map(rows.map((m: any) => [m.id, m])).values()];
+  for (let page = 2; page <= Math.min(first.total_pages, maxPages); page++) {
+    rows.push(...(await tmdb(`${path}${path.includes('?') ? '&' : '?'}page=${page}`, tmdbListSchema)).results);
+  }
+  return [...new Map(rows.map(movie => [movie.id, movie])).values()];
 }
+
+type CatalogLists = Record<'popular' | 'now_playing' | 'upcoming', TmdbListMovie[]>;
+type Report = (message: string) => void;
+
+async function loadCatalogLists(report: Report) {
+  const today = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Argentina/Buenos_Aires', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).format(new Date());
+  const future = new Date(Date.now() + 120 * 86400000).toISOString().slice(0, 10);
+  const monthAgo = new Date(Date.parse(`${today}T00:00:00Z`) - 30 * 86400000).toISOString().slice(0, 10);
+  const load = async (label: string, path: string) => {
+    report(`Cargando lista: ${label}…`);
+    const rows = await loadList(path);
+    report(`${label}: ${rows.length} películas encontradas.`);
+    return rows;
+  };
+  const lists: CatalogLists = {
+    popular: await load('Populares', '/movie/popular'),
+    now_playing: [...new Map([
+      ...await load('Cartelera', '/movie/now_playing'),
+      ...await load('Estrenos del último mes', `/discover/movie?with_release_type=2|3&release_date.gte=${monthAgo}&release_date.lte=${today}&sort_by=popularity.desc`),
+    ].map(movie => [movie.id, movie])).values()],
+    upcoming: await load('Próximas', `/discover/movie?with_release_type=2|3&release_date.gte=${today}&release_date.lte=${future}&sort_by=primary_release_date.asc`),
+  };
+  return { lists, monthAgo };
+}
+
+async function movieIdsToSync(lists: CatalogLists) {
+  const ids = new Set(Object.values(lists).flatMap(rows => rows.map(movie => movie.id)));
+  const saved = await prisma.movie.findMany({ where: { tmdbId: { not: null } }, select: { tmdbId: true } });
+  for (const movie of saved) ids.add(movie.tmdbId!);
+  return ids;
+}
+
+async function saveCatalog(lists: CatalogLists, movieIds: Map<number, number>, runId: number, imported: number) {
+  await prisma.$transaction(async tx => {
+    // Replace the visible catalog only after every TMDB request succeeded.
+    await tx.catalogEntry.deleteMany();
+    for (const [kind, rows] of Object.entries(lists)) {
+      await tx.catalogEntry.createMany({
+        data: rows.map((movie, position) => ({
+          kind, position, movieId: movieIds.get(movie.id)!,
+          tmdbRating: movie.vote_average ? movie.vote_average / 2 : null,
+        })),
+      });
+    }
+    await tx.syncRun.update({ where: { id: runId }, data: { status: 'success', imported, finishedAt: new Date() } });
+  });
+}
+
 export async function syncCatalog(report: (message: string) => void = () => {}) {
   report('Iniciando sincronización TMDB…');
-  const owner = randomUUID(), name = 'tmdb-catalog';
-  const acquired = await prisma.$transaction(async tx => {
-    await tx.jobLock.deleteMany({ where: { name, expiresAt: { lt: new Date() } } });
-    try { await tx.jobLock.create({ data: { name, owner, expiresAt: new Date(Date.now() + 10 * 60000) } }); return true; }
-    catch (e: any) { if (e.code === 'P2002') return false; throw e; }
-  });
-  if (!acquired) { report('Ya hay una sincronización en curso; no se inició otra.'); return { skipped: true }; }
   const run = await prisma.syncRun.create({ data: {} });
-  let lockLost = false;
-  const heartbeat = setInterval(() => {
-    prisma.jobLock.updateMany({ where: { name, owner }, data: { expiresAt: new Date(Date.now() + 10 * 60000) } })
-      .then(r => { if (!r.count) lockLost = true; }).catch(() => { lockLost = true; });
-  }, 60000);
   let imported = 0;
   try {
-    const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Argentina/Buenos_Aires', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
-    const future = new Date(Date.now() + 120 * 86400000).toISOString().slice(0, 10);
-    const monthAgo = new Date(Date.parse(`${today}T00:00:00Z`) - 30 * 86400000).toISOString().slice(0, 10);
-    const load = async (label: string, path: string) => {
-      report(`Cargando lista: ${label}…`);
-      const rows = await loadList(path);
-      report(`${label}: ${rows.length} películas encontradas.`);
-      return rows;
-    };
-    const lists: Record<string, any[]> = {
-      popular: await load('Populares', '/movie/popular'),
-      now_playing: [...new Map([
-        ...await load('Cartelera', '/movie/now_playing'),
-        ...await load('Estrenos del último mes', `/discover/movie?with_release_type=2|3&release_date.gte=${monthAgo}&release_date.lte=${today}&sort_by=popularity.desc`),
-      ].map(m => [m.id, m])).values()],
-      upcoming: await load('Próximas', `/discover/movie?with_release_type=2|3&release_date.gte=${today}&release_date.lte=${future}&sort_by=primary_release_date.asc`),
-    };
-    const ids = new Set<number>(Object.values(lists).flatMap(rows => rows.map(m => m.id)));
-    // Refresh saved TMDB movies as well, preserving reviews and editorial flags.
-    const saved = await prisma.movie.findMany({ where: { tmdbId: { not: null } }, select: { tmdbId: true } });
-    for (const m of saved) ids.add(m.tmdbId!);
+    const { lists, monthAgo } = await loadCatalogLists(report);
+    const ids = await movieIdsToSync(lists);
     report(`Actualizando detalles de ${ids.size} películas. Esto puede tardar unos minutos…`);
     const mapping = new Map<number, number>();
     const cinemaRelease = new Map<number, string | null>();
     const upcomingIds = new Set(lists.upcoming.map(movie => movie.id));
     for (const id of ids) {
-      if (lockLost) throw new Error('Se perdió el bloqueo de sincronización');
       const movie = await importMovieFromTmdb(id, upcomingIds.has(id));
       mapping.set(id, movie.id); cinemaRelease.set(id, movie.lastCinemaRelease); imported++;
       if (imported % 10 === 0 || imported === ids.size) report(`Películas actualizadas: ${imported}/${ids.size}`);
@@ -118,23 +210,11 @@ export async function syncCatalog(report: (message: string) => void = () => {}) 
       .sort((a, b) => cinemaRelease.get(b.id)!.localeCompare(cinemaRelease.get(a.id)!));
     report(`Cartelera: ${lists.now_playing.length} películas en cines de Argentina en el último mes.`);
     report('Guardando las listas actualizadas…');
-    await prisma.$transaction(async tx => {
-      const lock = await tx.jobLock.findFirst({ where: { name, owner, expiresAt: { gt: new Date() } } });
-      if (!lock || lockLost) throw new Error('Se perdió el bloqueo de sincronización');
-      // Only replace membership once every list and movie was successfully fetched.
-      await tx.catalogEntry.deleteMany();
-      for (const [kind, rows] of Object.entries(lists)) {
-        await tx.catalogEntry.createMany({ data: rows.map((m, position) => ({ kind, position, movieId: mapping.get(m.id)!, tmdbRating: m.vote_average ? m.vote_average / 2 : null })) });
-      }
-      await tx.syncRun.update({ where: { id: run.id }, data: { status: 'success', imported, finishedAt: new Date() } });
-    });
+    await saveCatalog(lists, mapping, run.id, imported);
     report(`Sincronización completa: ${imported} películas actualizadas.`);
     return { imported };
   } catch (error) {
     await prisma.syncRun.update({ where: { id: run.id }, data: { status: 'failed', imported, error: error instanceof Error ? error.message : String(error), finishedAt: new Date() } });
     throw error;
-  } finally {
-    clearInterval(heartbeat);
-    await prisma.jobLock.deleteMany({ where: { name, owner } });
   }
 }

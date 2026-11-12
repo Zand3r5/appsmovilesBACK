@@ -148,7 +148,6 @@ export function redeemReward(userId: number, rewardId: unknown) {
     await recordPoints(tx, userId, `redemption:${redemption.id}`, 'redemption', -reward.cost, `Canje: ${reward.title}`, redemption.createdAt);
     return {
       success: true,
-      redemptionId: redemption.id,
       code: redemption.code,
       rewards: await buildRewardsSnapshot(userId, tx),
     };

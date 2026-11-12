@@ -49,8 +49,9 @@ model Movie {
 }
 
 model Genre {
-  id     Int     @id
-  name   String
+  id     Int     @id @default(autoincrement())
+  tmdbId Int?    @unique
+  name   String  @unique
   movies Movie[]
 }
 
@@ -58,6 +59,7 @@ model Review {
   id        Int       @id @default(autoincrement())
   text      String
   rating    Float?
+  // Nullable only for historical reviews. New and edited reviews require a photo.
   photo     String?
   createdAt DateTime  @default(now())
   updatedAt DateTime? @updatedAt
@@ -170,12 +172,6 @@ model SyncRun {
   status String @default("running")
   imported Int @default(0)
   error String?
-}
-
-model JobLock {
-  name String @id
-  owner String
-  expiresAt DateTime
 }
 
 model CinemaLookup {

@@ -1,17 +1,14 @@
 import bcrypt from 'bcrypt';
 import { prisma } from '../prisma';
-import { isBcryptPassword, isStrongPassword } from '../utils/validation';
 import { fail } from '../utils/http';
+import { validatePasswordChange } from '../validation/auth';
 
-export async function changePassword(userId: number, sessionId: string, currentPassword: unknown, newPassword: unknown) {
-  if (!isBcryptPassword(currentPassword) || !currentPassword) fail(400, 'Ingresá tu contraseña actual');
-  if (!isStrongPassword(newPassword)) {
-    fail(400, 'Elegí una contraseña de 8 a 72 caracteres, con letras y números. Si usás símbolos especiales, elegí una más corta.');
-  }
+export async function changePassword(userId: number, sessionId: string, body: unknown) {
+  const { currentPassword, newPassword } = validatePasswordChange(body);
   const user = await prisma.user.findUniqueOrThrow({ where: { id: userId }, select: { passwordHash: true } });
   if (!await bcrypt.compare(currentPassword, user.passwordHash)) fail(400, 'La contraseña actual es incorrecta');
-  if (await bcrypt.compare(newPassword as string, user.passwordHash)) fail(400, 'La nueva contraseña debe ser diferente de la actual');
-  const passwordHash = await bcrypt.hash(newPassword as string, 10);
+  if (await bcrypt.compare(newPassword, user.passwordHash)) fail(400, 'La nueva contraseña debe ser diferente de la actual');
+  const passwordHash = await bcrypt.hash(newPassword, 10);
   await prisma.$transaction(async tx => {
     
     const changed = await tx.user.updateMany({ where: { id: userId, passwordHash: user.passwordHash }, data: { passwordHash } });

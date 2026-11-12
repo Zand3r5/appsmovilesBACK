@@ -13,7 +13,6 @@ import { userRoutes } from './routes/users';
 import { socialRoutes } from './routes/social';
 import { rewardRoutes } from './routes/rewards';
 import { adminRoutes } from './routes/admin';
-import { walletRoutes } from './routes/wallet';
 import { uploadRoutes } from './routes/uploads';
 import { cinemaRoutes } from './routes/cinemas';
 import { errorHandler } from './middlewares/errors';
@@ -30,7 +29,7 @@ export function createApp() {
   });
   authRoutes(app); movieRoutes(app); releaseRoutes(app); reviewRoutes(app);
   userRoutes(app); socialRoutes(app); rewardRoutes(app); adminRoutes(app);
-  cinemaRoutes(app); uploadRoutes(app); walletRoutes(app);
+  cinemaRoutes(app); uploadRoutes(app);
   app.use((_req, res) => res.status(404).json({ error: 'Ruta inexistente' }));
   app.use(errorHandler);
   return app;

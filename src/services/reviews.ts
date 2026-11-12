@@ -1,12 +1,12 @@
 import { prisma } from '../prisma';
-import { publicUserSelect } from '../middlewares/auth';
-import { cleanText, isRating, parseId } from '../utils/validation';
+import { publicUserSelect } from './userShapes';
 import { fail } from '../utils/http';
 import { imageReference } from './uploads';
 import { getFriendIds } from './social';
 import { withUserPoints } from './points';
 import { awardAchievements } from './gamification';
 import { createNotification } from './notifications';
+import { validateReviewInput } from '../validation/reviews';
 
 export const reviewInclude = {
   author: { select: { ...publicUserSelect, _count: { select: { reviews: { where: { movie: { hidden: false } } } } } } },
@@ -57,16 +57,9 @@ export async function listReviews(where: any, viewerId?: number, popular = false
   return (await findReviewRows(where, popular)).map(review => reviewDTO(review, viewerId));
 }
 
-function reviewInput(body: any) {
-  const text = cleanText(body?.text, 5000);
-  if (!text || !isRating(body?.rating) || !body?.photo) fail(400, 'Reseña inválida: revisá texto, puntaje y foto');
-  return { text, rating: body.rating as number, photo: body.photo as string };
-}
-
-export async function createReview(userId: number, movieValue: unknown, body: unknown) {
-  const movieId = parseId(movieValue);
-  if (!movieId || !await prisma.movie.findFirst({ where: { id: movieId, hidden: false } })) fail(404, 'Película no encontrada');
-  const input = reviewInput(body);
+export async function createReview(userId: number, movieId: number, body: unknown) {
+  if (!await prisma.movie.findFirst({ where: { id: movieId, hidden: false } })) fail(404, 'Película no encontrada');
+  const input = validateReviewInput(body);
   const photo = await imageReference(input.photo, userId);
   return withUserPoints(userId, async tx => {
     const review = await tx.review.create({
@@ -78,12 +71,11 @@ export async function createReview(userId: number, movieValue: unknown, body: un
   });
 }
 
-export async function updateReview(userId: number, reviewValue: unknown, body: unknown) {
-  const id = parseId(reviewValue);
-  const existing = await prisma.review.findUnique({ where: { id: id ?? 0 } });
+export async function updateReview(userId: number, id: number, body: unknown) {
+  const existing = await prisma.review.findUnique({ where: { id } });
   if (!existing) fail(404, 'Reseña no encontrada');
   if (existing.authorId !== userId) fail(403, 'No tenés permiso para editar esta reseña');
-  const input = reviewInput(body);
+  const input = validateReviewInput(body);
   const photo = await imageReference(input.photo, userId);
   return withUserPoints(userId, async tx => {
     const review = await tx.review.update({ where: { id: existing.id }, data: { ...input, photo }, include: reviewInclude });
@@ -92,15 +84,14 @@ export async function updateReview(userId: number, reviewValue: unknown, body: u
   });
 }
 
-export async function deleteReview(userId: number, userRole: string, reviewValue: unknown) {
-  const review = await prisma.review.findUnique({ where: { id: parseId(reviewValue) ?? 0 } });
+export async function deleteReview(userId: number, userRole: string, id: number) {
+  const review = await prisma.review.findUnique({ where: { id } });
   if (!review) fail(404, 'Reseña no encontrada');
   if (review.authorId !== userId && !['moderator', 'superadmin'].includes(userRole)) fail(403, 'No tenés permiso');
   await prisma.review.delete({ where: { id: review.id } });
 }
 
-export async function toggleReviewReaction(userId: number, reviewValue: unknown, kind: 'like' | 'repost') {
-  const reviewId = parseId(reviewValue) ?? 0;
+export async function toggleReviewReaction(userId: number, reviewId: number, kind: 'like' | 'repost') {
   const owner = await prisma.review.findUnique({ where: { id: reviewId }, select: { authorId: true } });
   if (!owner) fail(404, 'Reseña no encontrada');
   if (owner.authorId === userId) fail(403, 'No podés reaccionar a tu propia reseña');
